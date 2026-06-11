@@ -1,0 +1,8 @@
+akshare
+yfinance
+quantstats
+matplotlib
+pandas
+numpy
+scikit-learn
+pyyaml

@@ -1,0 +1,70 @@
+# ============================================
+# ETF 轮动策略配置文件
+# ============================================
+
+# 数据源配置
+data_source:
+  provider: yfinance       # akshare | yfinance
+
+# 回测全局配置
+backtest:
+  start_date: "20160701"
+  cache_dir: "./data_cache"
+
+# 策略列表
+# mode: rotation  -> 每天选最强 top_n 个，等权分配
+# mode: weighted  -> 按配置 weight 持有，定期再平衡
+strategies:
+  - name: "原始动量轮动策略"
+    description: "A股风格轮动，20日涨幅选最强"
+    enabled: false
+    mode: rotation
+    pool:
+      - { code: "510300", name: "沪深300ETF" }
+      - { code: "510500", name: "中证500ETF" }
+      - { code: "510880", name: "红利ETF" }
+      - { code: "159915", name: "创业板ETF" }
+    params:
+      lookback: 20
+      scoring: momentum      # momentum | slope_r2
+      top_n: 1
+
+  - name: "跨市场动量轮动"
+    description: "红利/创业板/纳指/黄金，20日涨幅选最强"
+    enabled: false
+    mode: rotation
+    start_date: "20150101"    # 策略级起始日（会取各 ETF 实际最晚起始日）
+    pool:
+      - { code: "510880", name: "红利ETF" }
+      - { code: "159915", name: "创业板ETF" }
+      - { code: "513100", name: "纳指ETF" }
+      - { code: "518880", name: "黄金ETF" }
+    params:
+      lookback: 20
+      scoring: momentum
+      top_n: 1
+
+  - name: "跨市场斜率轮动"
+    description: "红利/创业板/纳指/黄金，25日斜率*R2得分选最强"
+    enabled: false
+    mode: rotation
+    pool:
+      - { code: "510880", name: "红利ETF" }
+      - { code: "159915", name: "创业板ETF" }
+      - { code: "513100", name: "纳指ETF" }
+      - { code: "518880", name: "黄金ETF" }
+    params:
+      lookback: 25
+      scoring: slope_r2
+      top_n: 1
+
+  - name: "权重再平衡组合"
+    description: "ETF等权重持有，每日再平衡"
+    enabled: true
+    mode: weighted
+    pool:
+      # - { code: "510300", name: "沪深300ETF", weight: 15 }
+      # - { code: "510880", name: "红利ETF", weight: 15 }
+      - { code: "512040", name: "价值100ETF富国", weight: 100 }
+    params:
+      rebalance_freq: 20

@@ -1,3 +1,4 @@
 data_cache/
 output/
 __pycache__
+.DS_Store

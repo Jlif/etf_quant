@@ -170,7 +170,93 @@ def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
         title=f"{strategy.name}回测报告",
     )
 
+    # 输出最新交易信号（用于实盘调仓）
+    print_latest_signal(strategy, result, name_list)
+
     return result, name_list
+
+
+def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_list: list[str]):
+    """打印最新交易信号，方便实盘操作"""
+    latest = result.iloc[-1]
+    prev = result.iloc[-2] if len(result) > 1 else None
+
+    print(f"\n{'='*60}")
+    print(f"【今日交易信号】{strategy.name}")
+    print(f"{'='*60}")
+    print(f"信号日期: {result.index[-1].date()}")
+    print(f"策略参数: lookback={strategy.params.get('lookback', 20)}日, top_n={strategy.params.get('top_n', 1)}")
+    print(f"{'-'*60}")
+
+    if strategy.mode == "rotation":
+        # 动量轮动策略：显示排名和得分
+        scoring = strategy.params.get("scoring", "momentum")
+        prefix = "得分_" if scoring == "slope_r2" else "涨幅_"
+
+        print(f"{'排名':<4} {'ETF名称':<20} {'代码':<10} {'20日得分':<12} {'建议仓位':<10}")
+        print(f"{'-'*60}")
+
+        # 按得分排序
+        scores = []
+        for name in name_list:
+            score_col = f"{prefix}{name}"
+            score = latest[score_col] if score_col in latest else 0
+            weight = latest[f"权重_{name}"] if f"权重_{name}" in latest else 0
+            # 获取代码
+            code = next((p.code for p in strategy.pool if p.name == name), "")
+            scores.append((name, code, score, weight))
+
+        scores.sort(key=lambda x: x[2], reverse=True)
+
+        for i, (name, code, score, weight) in enumerate(scores, 1):
+            marker = "★" if weight > 0 else " "
+            weight_pct = f"{weight*100:.0f}%" if weight > 0 else "0%"
+            score_str = f"{score:+.2%}" if scoring == "momentum" else f"{score:.4f}"
+            print(f"{marker}{i:<3} {name:<20} {code:<10} {score_str:<12} {weight_pct:<10}")
+
+        # 显示持仓变化
+        if prev is not None:
+            print(f"\n{'-'*60}")
+            print("持仓变化:")
+            current_holdings = [name for name in name_list if latest[f"权重_{name}"] > 0]
+            prev_holdings = [name for name in name_list if prev[f"权重_{name}"] > 0]
+
+            added = set(current_holdings) - set(prev_holdings)
+            removed = set(prev_holdings) - set(current_holdings)
+
+            if added:
+                for name in added:
+                    code = next((p.code for p in strategy.pool if p.name == name), "")
+                    print(f"  [买入] {name} ({code})")
+            if removed:
+                for name in removed:
+                    code = next((p.code for p in strategy.pool if p.name == name), "")
+                    print(f"  [卖出] {name} ({code})")
+            if not added and not removed:
+                print("  [维持] 持仓不变")
+
+        print(f"{'='*60}")
+        print("操作建议:")
+        holdings = [(name, latest[f"权重_{name}"]) for name in name_list if latest[f"权重_{name}"] > 0]
+        for name, weight in holdings:
+            code = next((p.code for p in strategy.pool if p.name == name), "")
+            print(f"  持有 {name} ({code}): {weight*100:.0f}%")
+
+    elif strategy.mode == "weighted":
+        # 加权组合策略：显示目标权重
+        print(f"{'ETF名称':<20} {'代码':<10} {'目标权重':<10} {'当前权重':<10}")
+        print(f"{'-'*60}")
+
+        weights = {p.name: p.weight for p in strategy.pool}
+        for name in name_list:
+            code = next((p.code for p in strategy.pool if p.name == name), "")
+            target = weights.get(name, 0)
+            print(f"{name:<20} {code:<10} {target:.0f}%")
+
+        print(f"{'='*60}")
+        print("操作建议: 按上述目标权重配置仓位")
+
+    print(f"{'='*60}")
 
 
 def main():

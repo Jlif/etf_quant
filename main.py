@@ -150,7 +150,7 @@ def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
 
     if strategy.mode == "rotation":
         result = rotation.run(data, name_list, strategy.params)
-        # 以第一个标的为基准
+        # 以第一个标的为基准（净值序列，从1开始）
         benchmark_col = f"{name_list[0]}净值"
         for name in name_list:
             result[f"{name}净值"] = result[name] / result[name].iloc[0]
@@ -163,10 +163,18 @@ def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
     else:
         raise ValueError(f"不支持的模式: {strategy.mode}")
 
-    # 绩效报告
+    # 绩效报告 - benchmark需要传入日收益率序列，而不是净值序列
+    benchmark_series = result[benchmark_col] if benchmark_col and benchmark_col in result.columns else None
+    # 将净值序列转换为日收益率序列
+    if benchmark_series is not None:
+        benchmark_returns = benchmark_series.pct_change().fillna(0)
+        benchmark_returns.name = benchmark_col  # 保持名称用于报告展示
+    else:
+        benchmark_returns = None
+
     performance_report(
         result["轮动策略净值"],
-        benchmark=result[benchmark_col] if benchmark_col and benchmark_col in result.columns else None,
+        benchmark=benchmark_returns,
         title=f"{strategy.name}回测报告",
     )
 

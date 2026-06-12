@@ -4,7 +4,7 @@
 
 # 数据源配置
 data_source:
-  provider: akshare       # akshare | yfinance
+  provider: yfinance       # akshare | yfinance
 
 # 回测全局配置
 backtest:

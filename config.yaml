@@ -58,22 +58,14 @@ strategies:
       scoring: slope_r2
       top_n: 1
 
-  - name: "沪深300"
-    description: "业绩基准"
-    enabled: true
-    mode: weighted
-    pool:
-      - { code: "510300", name: "沪深300ETF", weight: 100 }
-
   - name: "再平衡组合"
     description: "ETF权重持有，再平衡"
     enabled: true
     mode: weighted
     pool:
-      - { code: "510880", name: "红利ETF", weight: 20 }
+      - { code: "510880", name: "红利ETF", weight: 30 }
       - { code: "512040", name: "价值100ETF富国", weight: 50 }
-      - { code: "511880", name: "银华日利", weight: 15 }
-      - { code: "511010", name: "国债ETF", weight: 15 }
+      - { code: "511010", name: "国债ETF", weight: 20 }
     params:
       rebalance_freq: 60
 
@@ -82,11 +74,12 @@ strategies:
     enabled: true
     mode: rotation
     pool:
-      - { code: "512040", name: "价值100ETF富国" }
       - { code: "510300", name: "沪深300ETF" }
+      - { code: "512040", name: "价值100ETF富国" }
       - { code: "510880", name: "红利ETF" }
       - { code: "511010", name: "国债ETF" }
+      - { code: "588080", name: "科创50ETF易方达" }
     params:
       lookback: 20
       scoring: momentum      # momentum | slope_r2
-      top_n: 1
+      top_n: 2

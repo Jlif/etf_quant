@@ -193,6 +193,15 @@ def main():
         for f in os.listdir(output_dir):
             os.remove(os.path.join(output_dir, f))
 
+    # 清空 data_cache 目录
+    cache_dir = app_config.backtest.cache_dir
+    if os.path.exists(cache_dir):
+        for f in os.listdir(cache_dir):
+            file_path = os.path.join(cache_dir, f)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        print(f"[清理] 已清空缓存目录: {cache_dir}")
+
     # 初始化数据源
     data_source = get_data_source(
         name=app_config.data_source.provider,

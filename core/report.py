@@ -64,7 +64,7 @@ def plot_nav_curves(
         图片保存路径，None 则保存到 output 目录
     """
     if save_path is None:
-        save_path = os.path.join(OUTPUT_DIR, "轮动策略净值对比.png")
+        save_path = os.path.join(OUTPUT_DIR, "策略净值对比明细.png")
 
     n = len(results)
     fig, axes = plt.subplots(1, n, figsize=(8 * n, 6))
@@ -90,7 +90,7 @@ def plot_nav_curves(
         ax.set_title(strategy_name)
         ax.grid(True, alpha=0.3)
 
-    plt.suptitle("轮动策略净值曲线对比", fontsize=14, fontweight="bold")
+    plt.suptitle("净值曲线对比", fontsize=14, fontweight="bold")
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

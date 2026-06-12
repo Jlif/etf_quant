@@ -4,7 +4,7 @@
 
 # 数据源配置
 data_source:
-  provider: yfinance       # akshare | yfinance
+  provider: akshare       # akshare | yfinance
 
 # 回测全局配置
 backtest:
@@ -58,13 +58,21 @@ strategies:
       scoring: slope_r2
       top_n: 1
 
-  - name: "权重再平衡组合"
-    description: "ETF等权重持有，每日再平衡"
+  - name: "沪深300"
+    description: "业绩基准"
     enabled: true
     mode: weighted
     pool:
-      # - { code: "510300", name: "沪深300ETF", weight: 15 }
-      # - { code: "510880", name: "红利ETF", weight: 15 }
-      - { code: "512040", name: "价值100ETF富国", weight: 100 }
+      - { code: "510300", name: "沪深300ETF", weight: 100 }
+
+  - name: "策略组合"
+    description: "ETF权重持有，再平衡"
+    enabled: true
+    mode: weighted
+    pool:
+      - { code: "510880", name: "红利ETF", weight: 20 }
+      - { code: "512040", name: "价值100ETF富国", weight: 50 }
+      - { code: "511880", name: "银华日利", weight: 15 }
+      - { code: "511010", name: "国债ETF", weight: 15 }
     params:
-      rebalance_freq: 20
+      rebalance_freq: 60

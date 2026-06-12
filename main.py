@@ -180,11 +180,18 @@ def main():
 
     # 加载配置
     app_config = load_config(args.config)
+    enabled_strategies = [s for s in app_config.strategies if s.enabled]
     print("="*60)
     print("ETF 轮动策略回测系统")
     print(f"数据源: {app_config.data_source.provider}")
-    print(f"策略数: {len(app_config.strategies)}")
+    print(f"已启用策略数: {len(enabled_strategies)}")
     print("="*60)
+
+    # 清空 output 目录
+    output_dir = "./output"
+    if os.path.exists(output_dir):
+        for f in os.listdir(output_dir):
+            os.remove(os.path.join(output_dir, f))
 
     # 初始化数据源
     data_source = get_data_source(

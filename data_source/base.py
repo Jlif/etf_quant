@@ -20,6 +20,7 @@ class BaseDataSource(ABC):
         Returns
         -------
         pd.DataFrame
-            索引为日期, 至少包含一列以 code 命名的收盘价
+            索引为日期, 包含以 code 命名的 OHLC 四列:
+            {code}_open, {code}_high, {code}_low, {code}_close
         """
         ...

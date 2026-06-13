@@ -49,7 +49,8 @@ def get_data_source(
             # 由调用方在有缓存时避免重复请求。
             try:
                 _test = instance.fetch("510300", "20240101", "20240110")
-                if not _test.empty:
+                close_col = f"510300_close"
+                if close_col in _test.columns and not _test.empty:
                     print(f"[数据源] 使用 {candidate}")
                     return instance
             except Exception as e:

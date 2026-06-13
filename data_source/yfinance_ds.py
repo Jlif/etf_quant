@@ -36,7 +36,16 @@ class YFinanceDataSource(BaseDataSource):
             raise ValueError(f"未获取到 {code} ({ticker}) 的数据")
 
         if isinstance(df.columns, pd.MultiIndex):
-            df = df["Close"]
-        df.columns = [code]
+            # yfinance 单 ticker 返回 MultiIndex 列 (Price, Ticker)，取第一层 flatten
+            df.columns = df.columns.get_level_values(0)
+
+        df = df[["Open", "High", "Low", "Close"]].rename(
+            columns={
+                "Open": f"{code}_open",
+                "High": f"{code}_high",
+                "Low": f"{code}_low",
+                "Close": f"{code}_close",
+            }
+        )
         df.index = pd.to_datetime(df.index)
         return df

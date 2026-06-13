@@ -25,4 +25,11 @@ class AkshareDataSource(BaseDataSource):
 
         df["日期"] = pd.to_datetime(df["日期"])
         df = df.set_index("日期").sort_index()
-        return df[["收盘"]].rename(columns={"收盘": code})
+        return df[["开盘", "最高", "最低", "收盘"]].rename(
+            columns={
+                "开盘": f"{code}_open",
+                "最高": f"{code}_high",
+                "最低": f"{code}_low",
+                "收盘": f"{code}_close",
+            }
+        )

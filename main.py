@@ -107,12 +107,27 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
         if os.path.exists(cache_file):
             print(f"  [缓存] {code} ({name})")
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            close_col = f"{code}_close"
+            if close_col not in df.columns:
+                print(f"  [缓存格式旧] 重新下载 {code} ({name})")
+                df = data_source.fetch(code, target_start)
+                df.to_csv(cache_file)
         else:
             print(f"  [下载] {code} ({name}) via {data_source.name}")
             df = data_source.fetch(code, target_start)
             df.to_csv(cache_file)
 
-        all_data[name] = df[code]
+        close_col = f"{code}_close"
+        if close_col in df.columns:
+            all_data[name] = df[close_col]
+        elif code in df.columns:
+            # 兼容旧版单收盘价缓存
+            print(f"  [缓存旧格式] 仅使用收盘价: {code} ({name})")
+            all_data[name] = df[code]
+        else:
+            raise ValueError(
+                f"{cache_file} 中未找到 {close_col} 或 {code} 列"
+            )
         actual_starts[name] = df.index[0]
 
     # 异常复权跳空修正

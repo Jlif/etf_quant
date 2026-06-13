@@ -13,6 +13,7 @@ ETF 轮动策略回测系统入口
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import warnings
@@ -106,6 +107,7 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
     for code in codes:
         name = names[code]
         cache_file = os.path.join(cache_dir, f"{code}_{data_source.name}.csv")
+        meta_file = cache_file + ".meta.json"
 
         if os.path.exists(cache_file):
             print(f"  [缓存] {code} ({name})")
@@ -115,10 +117,18 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
                 print(f"  [缓存格式旧] 重新下载 {code} ({name})")
                 df = data_source.fetch(code, target_start)
                 df.to_csv(cache_file)
+                with open(meta_file, "w", encoding="utf-8") as f:
+                    json.dump({"adjusted": data_source.adjusted}, f)
+            elif os.path.exists(meta_file):
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                data_source.adjusted = meta.get("adjusted", True)
         else:
             print(f"  [下载] {code} ({name}) via {data_source.name}")
             df = data_source.fetch(code, target_start)
             df.to_csv(cache_file)
+            with open(meta_file, "w", encoding="utf-8") as f:
+                json.dump({"adjusted": data_source.adjusted}, f)
 
         close_col = f"{code}_close"
         open_col = f"{code}_open"
@@ -143,13 +153,18 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
         actual_starts[name] = df.index[0]
 
     # 异常复权跳空修正（以 close 为准，同比例缩放 open/high/low）
-    for name in all_close:
-        fixed_close = detect_and_fix_price_jumps(all_close[name], name)
-        ratio = fixed_close / all_close[name]
-        all_close[name] = fixed_close
-        all_open[name] = all_open[name] * ratio
-        all_high[name] = all_high[name] * ratio
-        all_low[name] = all_low[name] * ratio
+    # 仅对明确为复权/已调整价格的数据源启用；未复权数据中的大跳空通常是
+    # 真实拆股/分红，修正反而会扭曲历史收益。
+    if data_source.adjusted:
+        for name in all_close:
+            fixed_close = detect_and_fix_price_jumps(all_close[name], name)
+            ratio = fixed_close / all_close[name]
+            all_close[name] = fixed_close
+            all_open[name] = all_open[name] * ratio
+            all_high[name] = all_high[name] * ratio
+            all_low[name] = all_low[name] * ratio
+    else:
+        print("  [数据] 当前数据源返回未复权价格，跳过复权跳空修正")
 
     data_close = pd.DataFrame(all_close)
     data_open = pd.DataFrame(all_open)
@@ -182,14 +197,32 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
     }
 
 
-def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
-    """执行单个策略回测"""
-    print(f"\n{'='*60}")
-    print(f"【{strategy.name}】{strategy.description}")
-    print(f"  模式: {strategy.mode} | 参数: {strategy.params}")
-    print(f"{'='*60}")
+def run_strategy(
+    strategy: StrategyConfig,
+    app_config: AppConfig,
+    data_source,
+    silent: bool = False,
+    data: dict | None = None,
+):
+    """执行单个策略回测
 
-    data = fetch_pool_data(strategy, app_config, data_source)
+    Parameters
+    ----------
+    silent : bool
+        为 True 时跳过报告、信号打印和文件输出，仅返回结果，
+        用于参数扫描等批量场景。
+    data : dict | None
+        预加载的池数据（由 fetch_pool_data 返回）。传入后可避免重复读取缓存，
+        在参数扫描等批量场景下减少 I/O 和日志输出。
+    """
+    if not silent:
+        print(f"\n{'='*60}")
+        print(f"【{strategy.name}】{strategy.description}")
+        print(f"  模式: {strategy.mode} | 参数: {strategy.params}")
+        print(f"{'='*60}")
+
+    if data is None:
+        data = fetch_pool_data(strategy, app_config, data_source)
     name_list = data["close"].columns.tolist()
 
     if strategy.mode == "rotation":
@@ -207,6 +240,9 @@ def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
     else:
         raise ValueError(f"不支持的模式: {strategy.mode}")
 
+    if silent:
+        return result, name_list
+
     # 绩效报告 - benchmark需要传入日收益率序列，而不是净值序列
     benchmark_series = result[benchmark_col] if benchmark_col and benchmark_col in result.columns else None
     # 将净值序列转换为日收益率序列
@@ -216,13 +252,18 @@ def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
     else:
         benchmark_returns = None
 
+    # quantstats 在当前版本下对净值序列的累计收益计算有兼容性问题，
+    # 直接传入日收益率序列可得到正确的滚动收益指标。
+    strategy_returns = result["轮动策略净值"].pct_change().fillna(0)
+    strategy_returns.name = "轮动策略净值"
+
     # 提前构建换仓记录，供 HTML 报告和 CSV 使用
     rebalance_df = None
     if strategy.mode == "rotation" and "换仓" in result.columns:
         rebalance_df = _build_rebalance_df(result)
 
     performance_report(
-        result["轮动策略净值"],
+        strategy_returns,
         benchmark=benchmark_returns,
         title=f"{strategy.name}回测报告",
         rebalance_df=rebalance_df,

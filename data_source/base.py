@@ -11,6 +11,8 @@ class BaseDataSource(ABC):
     """数据源抽象基类"""
 
     name: str = "base"
+    adjusted: bool = True
+    """最近一次 fetch 返回的价格是否为复权/已调整价格。"""
 
     @abstractmethod
     def fetch(self, code: str, start: str, end: str | None = None) -> pd.DataFrame:

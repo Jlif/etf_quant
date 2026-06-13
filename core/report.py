@@ -141,18 +141,24 @@ def _translate_html_metrics(html_content: str) -> str:
 
 
 def performance_report(
-    nav: pd.Series,
+    returns: pd.Series,
     benchmark: pd.Series | None = None,
     title: str = "策略回测报告",
     rebalance_df: pd.DataFrame | None = None,
 ) -> str:
-    """输出 quantstats 回测报告并保存 HTML 到 output 目录（不自动打开浏览器）"""
+    """输出 quantstats 回测报告并保存 HTML 到 output 目录（不自动打开浏览器）
+
+    Parameters
+    ----------
+    returns : pd.Series
+        策略日收益率序列（非净值序列）。
+    """
     print(f"\n{'='*60}")
     print(f"  {title}")
     print(f"{'='*60}")
 
     # 使用 metrics 输出文字指标（避免 quantstats 图表兼容性问题）
-    qstat.reports.metrics(nav, benchmark=benchmark, display=True)
+    qstat.reports.metrics(returns, benchmark=benchmark, display=True)
 
     safe_title = title.replace(" ", "_").replace(":", "_")
     filename = f"{safe_title}.html"
@@ -160,7 +166,7 @@ def performance_report(
     try:
         # output 传字符串路径，quantstats 会写入该文件
         qstat.reports.html(
-            nav, benchmark=benchmark, title=title,
+            returns, benchmark=benchmark, title=title,
             output=filepath,
         )
         # 读取并翻译为中文

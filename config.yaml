@@ -4,7 +4,7 @@
 
 # 数据源配置
 data_source:
-  provider: yfinance       # akshare | yfinance
+  provider: akshare       # akshare | yfinance
 
 # 回测全局配置
 backtest:
@@ -82,8 +82,8 @@ strategies:
       - { code: "159915", name: "创业板ETF" }
       - { code: "513100", name: "纳指ETF" }
       - { code: "518880", name: "黄金ETF" }
-      # - { code: "515810", name: "中证800ETF易方达" }
+      - { code: "515810", name: "中证800ETF易方达" }
     params:
-      lookback: 20
+      lookback: 22
       scoring: momentum      # momentum | slope_r2
       top_n: 2

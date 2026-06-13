@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from data_source import get_data_source
 from core import (
+    OUTPUT_DIR,
     performance_report,
     plot_nav_curves,
     plot_strategy_comparison,
@@ -172,16 +173,65 @@ def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
     else:
         benchmark_returns = None
 
+    # 提前构建换仓记录，供 HTML 报告和 CSV 使用
+    rebalance_df = None
+    if strategy.mode == "rotation" and "换仓" in result.columns:
+        rebalance_df = _build_rebalance_df(result)
+
     performance_report(
         result["轮动策略净值"],
         benchmark=benchmark_returns,
         title=f"{strategy.name}回测报告",
+        rebalance_df=rebalance_df,
     )
 
     # 输出最新交易信号（用于实盘调仓）
     print_latest_signal(strategy, result, name_list)
 
+    # 输出轮动策略换仓记录 CSV
+    if strategy.mode == "rotation" and "换仓" in result.columns:
+        if rebalance_df is not None and not rebalance_df.empty:
+            safe_name = strategy.name.replace(" ", "_").replace(":", "_")
+            csv_path = os.path.join(OUTPUT_DIR, f"{safe_name}_换仓记录.csv")
+            rebalance_df.to_csv(csv_path, encoding="utf-8-sig")
+            print(f"[换仓记录已保存] {csv_path}")
+
     return result, name_list
+
+
+def _build_rebalance_df(result: pd.DataFrame) -> pd.DataFrame | None:
+    """从 rotation 策略结果中提取换仓记录 DataFrame。"""
+    if "换仓" not in result.columns or "持仓" not in result.columns:
+        return None
+
+    changes = result[result["换仓"]].copy()
+    if changes.empty:
+        return None
+
+    def _parse_holding_names(holding_str: str) -> set[str]:
+        return {
+            part.split("(")[0].strip()
+            for part in str(holding_str).split("+")
+            if part.strip()
+        }
+
+    prev_holdings = result["持仓"].shift(1)
+    changes["调出"] = [
+        "、".join(sorted(_parse_holding_names(prev) - _parse_holding_names(cur)))
+        for prev, cur in zip(prev_holdings.loc[changes.index], changes["持仓"])
+    ]
+    changes["调入"] = [
+        "、".join(sorted(_parse_holding_names(cur) - _parse_holding_names(prev)))
+        for prev, cur in zip(prev_holdings.loc[changes.index], changes["持仓"])
+    ]
+
+    nav_col = "轮动策略净值"
+    changes["换仓前净值"] = result[nav_col].shift(1).loc[changes.index]
+    changes["换仓后净值"] = result[nav_col].loc[changes.index]
+
+    rebalance_df = changes[["持仓", "调出", "调入", "换仓前净值", "换仓后净值"]]
+    rebalance_df.index.name = "日期"
+    return rebalance_df
 
 
 def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_list: list[str]):
@@ -287,19 +337,27 @@ def main():
         for f in os.listdir(output_dir):
             os.remove(os.path.join(output_dir, f))
 
-    # 清空 data_cache 目录
+    # 检查所有启用策略的 ETF 是否都已缓存
     cache_dir = app_config.backtest.cache_dir
-    if os.path.exists(cache_dir):
-        for f in os.listdir(cache_dir):
-            file_path = os.path.join(cache_dir, f)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-        print(f"[清理] 已清空缓存目录: {cache_dir}")
+    provider = app_config.data_source.provider
+    required_codes = {
+        p.code
+        for s in enabled_strategies
+        for p in s.pool
+    }
+    missing_codes = [
+        code for code in required_codes
+        if not os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
+    ]
+    skip_test = not missing_codes
+    if skip_test:
+        print(f"[缓存] 所有 {len(required_codes)} 个 ETF 已缓存，跳过数据源连通性测试")
 
     # 初始化数据源
     data_source = get_data_source(
-        name=app_config.data_source.provider,
+        name=provider,
         fallback=True,
+        skip_test=skip_test,
     )
 
     # 运行启用的策略

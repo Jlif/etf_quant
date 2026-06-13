@@ -81,4 +81,16 @@ def run(
     weight_cols = [f"权重_{n}" for n in name_list]
     df["信号"] = df[weight_cols].idxmax(axis=1).str.replace("权重_", "")
 
+    # 记录每日完整持仓组合，并标记换仓日
+    def _format_holding(row: pd.Series) -> str:
+        holdings = [(n, row[f"权重_{n}"]) for n in name_list if row[f"权重_{n}"] > 0]
+        holdings.sort(key=lambda x: x[1], reverse=True)
+        if not holdings:
+            return "空仓"
+        return "+".join(f"{n}({w * 100:.0f}%)" for n, w in holdings)
+
+    df["持仓"] = df.apply(_format_holding, axis=1)
+    df["换仓"] = df["持仓"] != df["持仓"].shift(1)
+    df.loc[df.index[0], "换仓"] = False
+
     return df

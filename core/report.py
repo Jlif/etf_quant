@@ -144,6 +144,7 @@ def performance_report(
     nav: pd.Series,
     benchmark: pd.Series | None = None,
     title: str = "策略回测报告",
+    rebalance_df: pd.DataFrame | None = None,
 ) -> str:
     """输出 quantstats 回测报告并保存 HTML 到 output 目录（不自动打开浏览器）"""
     print(f"\n{'='*60}")
@@ -166,12 +167,61 @@ def performance_report(
         with open(filepath, "r", encoding="utf-8") as f:
             html_content = f.read()
         html_content = _translate_html_metrics(html_content)
+
+        # 在 HTML 末尾追加换仓记录表格
+        if rebalance_df is not None and not rebalance_df.empty:
+            rebalance_html = _build_rebalance_html(rebalance_df)
+            # 在 </body> 前插入换仓记录
+            html_content = html_content.replace("</body>", f"{rebalance_html}\n</body>")
+
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(html_content)
         print(f"\n[报告已保存] {filepath}")
     except Exception as e:
         print(f"\n[警告] HTML 报告生成失败: {e}")
     return filepath
+
+
+def _build_rebalance_html(rebalance_df: pd.DataFrame) -> str:
+    """将换仓记录 DataFrame 转为 HTML 片段。"""
+    df = rebalance_df.copy()
+    df.index = pd.to_datetime(df.index).strftime("%Y-%m-%d")
+
+    # 重命名列，使其更易读
+    column_mapping = {
+        "持仓": "新持仓",
+        "调出": "调出标的",
+        "调入": "调入标的",
+        "换仓前净值": "换仓前净值",
+        "换仓后净值": "换仓后净值",
+    }
+    df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+
+    # 净值保留 4 位小数
+    for col in ["换仓前净值", "换仓后净值"]:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "-")
+
+    html = df.to_html(
+        classes="table table-striped table-hover",
+        border=0,
+        justify="left",
+        escape=False,
+    )
+
+    return f"""
+<div style="max-width: 1200px; margin: 40px auto; padding: 0 20px;">
+  <h2 style="color: #333; border-bottom: 2px solid #FF8124; padding-bottom: 10px;">换仓记录</h2>
+  <p style="color: #666;">共 {len(df)} 次换仓</p>
+  {html}
+</div>
+<style>
+  .table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+  .table th {{ background-color: #f8f9fa; padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; }}
+  .table td {{ padding: 10px 12px; border-bottom: 1px solid #dee2e6; }}
+  .table-striped tbody tr:nth-child(odd) {{ background-color: #f8f9fa; }}
+</style>
+"""
 
 
 def plot_nav_curves(
@@ -196,10 +246,23 @@ def plot_nav_curves(
     if n == 1:
         axes = [axes]
 
+    default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
     for ax, (strategy_name, (data, name_list, nav_col)) in zip(axes, results.items()):
+        name_color = {
+            name: default_colors[i % len(default_colors)]
+            for i, name in enumerate(name_list)
+        }
         for name in name_list:
             nav = data[name] / data[name].iloc[0]
-            ax.plot(nav.index, nav.values, linestyle="--", alpha=0.7, label=name)
+            ax.plot(
+                nav.index,
+                nav.values,
+                linestyle="--",
+                alpha=0.7,
+                color=name_color[name],
+                label=name,
+            )
 
         ax.plot(
             data[nav_col].index,
@@ -209,6 +272,7 @@ def plot_nav_curves(
             linewidth=2,
             label="策略净值",
         )
+
         ax.set_xlabel("日期")
         ax.set_ylabel("净值")
         ax.legend(loc="upper left")

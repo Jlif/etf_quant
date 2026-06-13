@@ -79,22 +79,11 @@ strategies:
       - { code: "510880", name: "红利ETF" }
       - { code: "511010", name: "国债ETF" }
       - { code: "588080", name: "科创50ETF易方达" }
+      - { code: "159915", name: "创业板ETF" }
+      - { code: "513100", name: "纳指ETF" }
+      - { code: "518880", name: "黄金ETF" }
+      # - { code: "515810", name: "中证800ETF易方达" }
     params:
       lookback: 20
       scoring: momentum      # momentum | slope_r2
-      top_n: 2
-
-  - name: "斜率轮动策略"
-    description: "A股风格轮动，20日涨幅选最强"
-    enabled: true
-    mode: rotation
-    pool:
-      - { code: "512040", name: "价值100ETF富国" }
-      - { code: "510300", name: "沪深300ETF" }
-      - { code: "510880", name: "红利ETF" }
-      - { code: "511010", name: "国债ETF" }
-      - { code: "588080", name: "科创50ETF易方达" }
-    params:
-      lookback: 20
-      scoring: slope_r2      # momentum | slope_r2
       top_n: 2

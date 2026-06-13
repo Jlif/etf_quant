@@ -8,17 +8,23 @@ from core.scorer import momentum_score, slope_r2_score
 
 
 def run(
-    data: pd.DataFrame,
+    data: dict[str, pd.DataFrame],
     name_list: list[str],
     params: dict,
 ) -> pd.DataFrame:
     """
     轮动策略回测
 
+    T 日收盘后计算信号，确定 T+1 日持仓。
+    - 新调入的标的：T+1 日开盘价买入，收益 = close_T+1 / open_T+1 - 1
+    - 继续持有的标的：T 日收盘已持有，收益 = close_T+1 / close_T - 1
+    - 调出的标的：T+1 日不再产生收益
+
     Parameters
     ----------
-    data : pd.DataFrame
-        收盘价数据
+    data : dict[str, pd.DataFrame]
+        包含 close/open/high/low 四个字典，其中 close 用于计算信号，
+        open 用于计算新调入标的的开盘价成交收益。
     name_list : list[str]
         标的名称列表
     params : dict
@@ -35,13 +41,19 @@ def run(
     scoring = params.get("scoring", "momentum")
     top_n = params.get("top_n", 1)
 
-    df = data.copy()
+    close_df = data["close"].copy()
+    open_df = data["open"].copy()
 
-    # 1. 计算日收益率
+    df = close_df.copy()
+
+    # 1. 计算两种日收益率
     for name in name_list:
-        df[f"日收益率_{name}"] = df[name] / df[name].shift(1) - 1.0
+        # 新调入标的：开盘价买入，收盘价结算
+        df[f"日收益率_再平衡_{name}"] = close_df[name] / open_df[name] - 1.0
+        # 继续持有标的：前日收盘价已持有，当日收盘价结算
+        df[f"日收益率_持有_{name}"] = close_df[name] / close_df[name].shift(1) - 1.0
 
-    # 2. 计算得分
+    # 2. 计算得分（基于收盘价）
     if scoring == "slope_r2":
         for name in name_list:
             df[f"得分_{name}"] = df[name].rolling(lookback).apply(
@@ -63,16 +75,30 @@ def run(
         col = f"{prefix}{name}"
         df[f"权重_{name}"] = (rank_df[col] <= top_n).astype(float) / top_n
 
-    # 4. 持仓权重前移1天（T日收益由T-1日持仓产生）
+    # 4. 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
     for name in name_list:
         df[f"权重_{name}"] = df[f"权重_{name}"].shift(1)
 
     df = df.dropna()
 
     # 5. 计算策略日收益率
+    #    区分新调入（按开盘价成交）和继续持有（按前日收盘价持有）
     df["轮动策略日收益率"] = 0.0
     for name in name_list:
-        df["轮动策略日收益率"] += df[f"日收益率_{name}"] * df[f"权重_{name}"]
+        weight_col = f"权重_{name}"
+        prev_weight = df[weight_col].shift(1).fillna(0)
+
+        # 新调入：今日权重 > 0 且 昨日权重 == 0
+        is_entry = (df[weight_col] > 0) & (prev_weight == 0)
+        # 继续持有：今日权重 > 0 且 昨日权重 > 0
+        is_hold = (df[weight_col] > 0) & (prev_weight > 0)
+
+        df.loc[is_entry, "轮动策略日收益率"] += (
+            df.loc[is_entry, f"日收益率_再平衡_{name}"] * df.loc[is_entry, weight_col]
+        )
+        df.loc[is_hold, "轮动策略日收益率"] += (
+            df.loc[is_hold, f"日收益率_持有_{name}"] * df.loc[is_hold, weight_col]
+        )
 
     df.loc[df.index[0], "轮动策略日收益率"] = 0.0
     df["轮动策略净值"] = (1.0 + df["轮动策略日收益率"]).cumprod()

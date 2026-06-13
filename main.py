@@ -98,7 +98,10 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
     target_start = strategy.start_date or app_config.backtest.start_date
     target_start_dt = pd.to_datetime(target_start)
 
-    all_data = {}
+    all_close = {}
+    all_open = {}
+    all_high = {}
+    all_low = {}
     actual_starts = {}  # 记录每个 ETF 实际数据起始日
     for code in codes:
         name = names[code]
@@ -118,23 +121,40 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
             df.to_csv(cache_file)
 
         close_col = f"{code}_close"
+        open_col = f"{code}_open"
+        high_col = f"{code}_high"
+        low_col = f"{code}_low"
         if close_col in df.columns:
-            all_data[name] = df[close_col]
+            all_close[name] = df[close_col]
+            all_open[name] = df[open_col]
+            all_high[name] = df[high_col]
+            all_low[name] = df[low_col]
         elif code in df.columns:
             # 兼容旧版单收盘价缓存
             print(f"  [缓存旧格式] 仅使用收盘价: {code} ({name})")
-            all_data[name] = df[code]
+            all_close[name] = df[code]
+            all_open[name] = df[code]
+            all_high[name] = df[code]
+            all_low[name] = df[code]
         else:
             raise ValueError(
                 f"{cache_file} 中未找到 {close_col} 或 {code} 列"
             )
         actual_starts[name] = df.index[0]
 
-    # 异常复权跳空修正
-    for name in all_data:
-        all_data[name] = detect_and_fix_price_jumps(all_data[name], name)
+    # 异常复权跳空修正（以 close 为准，同比例缩放 open/high/low）
+    for name in all_close:
+        fixed_close = detect_and_fix_price_jumps(all_close[name], name)
+        ratio = fixed_close / all_close[name]
+        all_close[name] = fixed_close
+        all_open[name] = all_open[name] * ratio
+        all_high[name] = all_high[name] * ratio
+        all_low[name] = all_low[name] * ratio
 
-    data = pd.DataFrame(all_data)
+    data_close = pd.DataFrame(all_close)
+    data_open = pd.DataFrame(all_open)
+    data_high = pd.DataFrame(all_high)
+    data_low = pd.DataFrame(all_low)
 
     # 策略实际起始日 = max(配置起始日, 所有 ETF 中最晚的数据起始日)
     latest_etf_start = max(actual_starts.values())
@@ -146,12 +166,20 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
             if st > target_start_dt:
                 print(f"         {name} 实际起始: {st.date()}")
 
-    if effective_start != data.index[0]:
+    if effective_start != data_close.index[0]:
         print(f"  [调整] 策略实际起始日: {effective_start.date()}")
-        data = data.loc[data.index >= effective_start]
+        data_close = data_close.loc[data_close.index >= effective_start]
+        data_open = data_open.loc[data_open.index >= effective_start]
+        data_high = data_high.loc[data_high.index >= effective_start]
+        data_low = data_low.loc[data_low.index >= effective_start]
 
-    print(f"  时间范围: {data.index[0].date()} ~ {data.index[-1].date()}, 共 {len(data)} 条")
-    return data
+    print(f"  时间范围: {data_close.index[0].date()} ~ {data_close.index[-1].date()}, 共 {len(data_close)} 条")
+    return {
+        "close": data_close,
+        "open": data_open,
+        "high": data_high,
+        "low": data_low,
+    }
 
 
 def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
@@ -162,7 +190,7 @@ def run_strategy(strategy: StrategyConfig, app_config: AppConfig, data_source):
     print(f"{'='*60}")
 
     data = fetch_pool_data(strategy, app_config, data_source)
-    name_list = data.columns.tolist()
+    name_list = data["close"].columns.tolist()
 
     if strategy.mode == "rotation":
         result = rotation.run(data, name_list, strategy.params)

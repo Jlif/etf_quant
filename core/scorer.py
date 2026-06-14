@@ -30,3 +30,27 @@ def slope_r2_score(srs: pd.Series, lookback: int) -> float:
     slope = lr.coef_[0]
     r_squared = lr.score(x.reshape(-1, 1), y)
     return 10000 * slope * r_squared
+
+
+def momentum_quality_score(srs: pd.Series, lookback: int) -> float:
+    """
+    动量质量得分：涨得稳的 ETF 得更高分。
+
+    score = 区间总收益 / 区间日收益波动率
+
+    该指标惩罚那些靠突发暴涨暴跌堆砌出来的“假动量”，
+    优先选择稳步上涨的标的。
+    """
+    if srs.shape[0] < 3:
+        return np.nan
+
+    total_return = srs.iloc[-1] / srs.iloc[0] - 1.0
+    daily_returns = srs.pct_change().dropna()
+    if len(daily_returns) < 2:
+        return np.nan
+
+    volatility = daily_returns.std()
+    if volatility == 0 or pd.isna(volatility):
+        return -np.inf
+
+    return total_return / volatility

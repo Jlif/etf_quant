@@ -4,7 +4,7 @@
 
 # 数据源配置
 data_source:
-  provider: akshare       # akshare | yfinance
+  provider: akshare
 
 # 回测全局配置
 backtest:
@@ -85,5 +85,16 @@ strategies:
       - { code: "515810", name: "中证800ETF易方达" }
     params:
       lookback: 22
-      scoring: momentum      # momentum | slope_r2
+      scoring: momentum      # momentum | slope_r2 | momentum_quality
       top_n: 2
+      # 风控参数（均为可选，不配置时保持原始轮动行为）
+      # 1. 绝对动量过滤（双重动量防守）：入选标的中自身动量为负的仓位自动切到 safe_haven
+      absolute_momentum_filter: true
+      absolute_momentum_lookback: 8
+      absolute_momentum_threshold: 0.0
+      safe_haven: "国债ETF"
+      # 2. 目标波动率控制：当组合实际波动率超过目标值时，减仓并切换至 safe_haven
+      target_volatility: 0.07
+      volatility_lookback: 15
+      # 3. 移动止损：持仓标的从高点回撤超过比例时强制清仓
+      trailing_stop_pct: 0.08

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from core.scorer import momentum_score, slope_r2_score
+from core.scorer import momentum_quality_score, momentum_score, slope_r2_score
+from .risk import absolute_momentum_filter, trailing_stop_filter, volatility_target_filter
 
 
 def run(
@@ -61,6 +62,13 @@ def run(
             )
         signal_cols = [f"得分_{v}" for v in name_list]
         prefix = "得分_"
+    elif scoring == "momentum_quality":
+        for name in name_list:
+            df[f"质量_{name}"] = df[name].rolling(lookback).apply(
+                lambda x: momentum_quality_score(x, lookback)
+            )
+        signal_cols = [f"质量_{v}" for v in name_list]
+        prefix = "质量_"
     else:
         for name in name_list:
             df[f"涨幅_{name}"] = df[name] / df[name].shift(lookback + 1) - 1.0
@@ -74,6 +82,94 @@ def run(
     for name in name_list:
         col = f"{prefix}{name}"
         df[f"权重_{name}"] = (rank_df[col] <= top_n).astype(float) / top_n
+
+    # 初始化风控原因列，用于记录每个过滤器对持仓的调整
+    df["风控原因"] = ""
+
+    # 3.5 风控过滤器（可选）：绝对动量过滤
+    if params.get("absolute_momentum_filter", False):
+        safe_haven = params.get("safe_haven")
+        if not safe_haven:
+            raise ValueError("开启 absolute_momentum_filter 时必须配置 safe_haven")
+        abs_lookback = params.get("absolute_momentum_lookback", lookback)
+        abs_threshold = params.get("absolute_momentum_threshold", 0.0)
+
+        weight_cols = [f"权重_{n}" for n in name_list]
+        weights_df = df[weight_cols].copy()
+        pre_weights = weights_df.copy()
+        adjusted_weights = absolute_momentum_filter(
+            weights_df=weights_df,
+            close_df=close_df,
+            lookback=abs_lookback,
+            threshold=abs_threshold,
+            safe_haven=safe_haven,
+        )
+        for name in name_list:
+            df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
+
+        # 记录被该过滤器清零的标的
+        for name in name_list:
+            if name == safe_haven:
+                continue
+            triggered = (pre_weights[f"权重_{name}"] > 0) & (df[f"权重_{name}"] == 0)
+            if triggered.any():
+                df.loc[triggered, "风控原因"] += (
+                    f"{name}: 绝对动量过滤({abs_lookback}日收益≤{abs_threshold:.2%}); "
+                )
+
+    # 3.6 风控过滤器（可选）：目标波动率控制
+    if params.get("target_volatility") is not None:
+        target_vol = params["target_volatility"]
+        vol_lookback = params.get("volatility_lookback", 20)
+        safe_haven = params.get("safe_haven")
+
+        weight_cols = [f"权重_{n}" for n in name_list]
+        weights_df = df[weight_cols].copy()
+        pre_weights = weights_df.copy()
+        adjusted_weights = volatility_target_filter(
+            weights_df=weights_df,
+            close_df=close_df,
+            target_vol=target_vol,
+            vol_lookback=vol_lookback,
+            safe_haven=safe_haven,
+        )
+        for name in name_list:
+            df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
+
+        # 记录被降仓的风险资产
+        risk_names = [n for n in name_list if n != safe_haven]
+        for name in risk_names:
+            scaled = pre_weights[f"权重_{name}"] > df[f"权重_{name}"]
+            if scaled.any():
+                df.loc[scaled, "风控原因"] += (
+                    f"{name}: 目标波动率控制(组合波动>{target_vol:.2%}); "
+                )
+
+    # 3.7 风控过滤器（可选）：移动止损
+    if params.get("trailing_stop_pct") is not None:
+        stop_pct = params["trailing_stop_pct"]
+        safe_haven = params.get("safe_haven")
+
+        weight_cols = [f"权重_{n}" for n in name_list]
+        weights_df = df[weight_cols].copy()
+        pre_weights = weights_df.copy()
+        adjusted_weights = trailing_stop_filter(
+            weights_df=weights_df,
+            close_df=close_df,
+            stop_pct=stop_pct,
+            safe_haven=safe_haven,
+        )
+        for name in name_list:
+            df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
+
+        # 记录被该过滤器清仓的标的
+        risk_names = [n for n in name_list if n != safe_haven]
+        for name in risk_names:
+            triggered = (pre_weights[f"权重_{name}"] > 0) & (df[f"权重_{name}"] == 0)
+            if triggered.any():
+                df.loc[triggered, "风控原因"] += (
+                    f"{name}: 移动止损触发(回撤≥{stop_pct:.2%}); "
+                )
 
     # 4. 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
     for name in name_list:

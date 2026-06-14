@@ -62,6 +62,26 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                 raise ValueError(
                     f'策略 "{s["name"]}" 权重之和为 {total}%，必须等于 100%'
                 )
+
+        # 校验需要 safe_haven 的风控参数
+        params = s.get("params", {})
+        needs_safe_haven = (
+            params.get("absolute_momentum_filter", False)
+            or params.get("target_volatility") is not None
+            or params.get("trailing_stop_pct") is not None
+        )
+        if needs_safe_haven:
+            safe_haven = params.get("safe_haven")
+            if not safe_haven:
+                raise ValueError(
+                    f'策略 "{s["name"]}" 开启风控过滤器时必须配置 safe_haven'
+                )
+            pool_names = {p.name for p in pool}
+            if safe_haven not in pool_names:
+                raise ValueError(
+                    f'策略 "{s["name"]}" 的 safe_haven "{safe_haven}" 不在 pool 中，'
+                    f'可用的标的: {sorted(pool_names)}'
+                )
         strategies.append(
             StrategyConfig(
                 name=s["name"],

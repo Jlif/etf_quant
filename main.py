@@ -335,7 +335,7 @@ def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_lis
         scoring = strategy.params.get("scoring", "momentum")
         prefix = "得分_" if scoring == "slope_r2" else "涨幅_"
 
-        print(f"{'排名':<4} {'ETF名称':<20} {'代码':<10} {'20日得分':<12} {'建议仓位':<10}")
+        print(f"{'排名':<4} {'ETF名称':<20} {'代码':<10} {'周期动量得分':<12} {'建议仓位':<10}")
         print(f"{'-'*60}")
 
         # 按得分排序
@@ -376,6 +376,16 @@ def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_lis
                     print(f"  [卖出] {name} ({code})")
             if not added and not removed:
                 print("  [维持] 持仓不变")
+
+        # 打印风控触发原因（rotation 策略专用）
+        risk_reason = latest.get("风控原因", "")
+        if risk_reason:
+            print(f"{'-'*60}")
+            print("风控说明:")
+            for reason in str(risk_reason).split(";"):
+                reason = reason.strip()
+                if reason:
+                    print(f"  · {reason}")
 
         print(f"{'='*60}")
         print("操作建议:")

@@ -196,6 +196,15 @@ def run(
             df.loc[is_hold, f"日收益率_持有_{name}"] * df.loc[is_hold, weight_col]
         )
 
+        # 记录每只 ETF 每日的加权收益贡献，用于后续归因统计
+        df[f"贡献_日收益_{name}"] = 0.0
+        df.loc[is_entry, f"贡献_日收益_{name}"] = (
+            df.loc[is_entry, f"日收益率_再平衡_{name}"] * df.loc[is_entry, weight_col]
+        )
+        df.loc[is_hold, f"贡献_日收益_{name}"] = (
+            df.loc[is_hold, f"日收益率_持有_{name}"] * df.loc[is_hold, weight_col]
+        )
+
     df.loc[df.index[0], "轮动策略日收益率"] = 0.0
     df["轮动策略净值"] = (1.0 + df["轮动策略日收益率"]).cumprod()
 

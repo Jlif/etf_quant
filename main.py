@@ -272,6 +272,10 @@ def run_strategy(
     # 输出最新交易信号（用于实盘调仓）
     print_latest_signal(strategy, result, name_list)
 
+    # 输出各 ETF 持有天数与收益贡献占比（仅 rotation 策略）
+    if strategy.mode == "rotation":
+        print_position_contribution(strategy, result, name_list)
+
     # 输出轮动策略换仓记录 CSV
     if strategy.mode == "rotation" and "换仓" in result.columns:
         if rebalance_df is not None and not rebalance_df.empty:
@@ -408,6 +412,51 @@ def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_lis
         print(f"{'='*60}")
         print("操作建议: 按上述目标权重配置仓位")
 
+    print(f"{'='*60}")
+
+
+def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, name_list: list[str]):
+    """打印 rotation 策略各 ETF 的持有天数与收益贡献占比"""
+    final_nav = result["轮动策略净值"].iloc[-1]
+    total_return = final_nav - 1.0
+
+    print(f"\n{'='*60}")
+    print(f"【持仓统计与收益贡献】{strategy.name}")
+    print(f"{'='*60}")
+    print(f"{'ETF名称':<18} {'代码':<10} {'持有天数':<8} {'累计贡献':<10} {'贡献占比':<10}")
+    print(f"{'-'*60}")
+
+    rows = []
+    total_contribution = 0.0
+    for name in name_list:
+        code = next((p.code for p in strategy.pool if p.name == name), "")
+        hold_days = int((result[f"权重_{name}"] > 0).sum())
+        contrib_col = f"贡献_日收益_{name}"
+        if contrib_col in result.columns:
+            contribution = result[contrib_col].sum()
+        else:
+            contribution = 0.0
+        total_contribution += contribution
+        rows.append((name, code, hold_days, contribution))
+
+    # 按贡献占比排序
+    abs_total = abs(total_contribution) if total_contribution != 0 else 1.0
+    rows_with_ratio = [
+        (name, code, hold_days, contribution, contribution / abs_total)
+        for name, code, hold_days, contribution in rows
+    ]
+    rows_with_ratio.sort(key=lambda x: x[4], reverse=True)
+
+    for name, code, hold_days, contribution, ratio in rows_with_ratio:
+        print(
+            f"{name:<18} {code:<10} {hold_days:<8} "
+            f"{contribution:>+10.2%} {ratio:>+9.1%}"
+        )
+
+    print(f"{'-'*60}")
+    print(f"合计贡献（简单加总口径）: {total_contribution:+.2%}")
+    print(f"策略累计收益（复利口径）:   {total_return:+.2%}")
+    print("  注：因复利再投资效应，简单加总的贡献合计会低于复利累计收益")
     print(f"{'='*60}")
 
 

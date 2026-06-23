@@ -1,0 +1,96 @@
+name: ETF Daily Signal Alert
+
+on:
+  schedule:
+    # 每天北京时间 15:30 运行（UTC 07:30）
+    - cron: '30 7 * * *'
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  signal-alert:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run signal generation
+      id: signal
+      run: |
+        # 运行最新信号脚本，捕获输出
+        python latest_signal.py --config config.yaml 2>&1 | tee signal_output.txt
+
+        # 提取关键信号信息用于webhook
+        SIGNAL_DATE=$(grep '信号日期:' signal_output.txt | head -1 | sed 's/信号日期: //' | xargs)
+        echo "SIGNAL_DATE=$SIGNAL_DATE" >> $GITHUB_ENV
+
+        # 检查是否有调仓（买入/卖出）
+        BUY_SELL_COUNT=$(grep -cE '\[买入\]|\[卖出\]' signal_output.txt || echo '0')
+        echo "HAS_REBALANCE=$BUY_SELL_COUNT" >> $GITHUB_ENV
+
+        # 提取持仓变化部分
+        grep -A 10 '持仓变化:' signal_output.txt > rebalance_info.txt || true
+
+        # 提取操作建议部分
+        grep -A 10 '操作建议:' signal_output.txt > holdings_info.txt || true
+
+    - name: Send Feishu webhook alert
+      if: env.HAS_REBALANCE != '0'
+      env:
+        FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      run: |
+        # 读取调仓信息
+        REBALANCE_INFO=$(cat rebalance_info.txt | sed 's/"/\\"/g' | tr '\n' '\\n')
+        HOLDINGS_INFO=$(cat holdings_info.txt | sed 's/"/\\"/g' | tr '\n' '\\n')
+
+        # 构建飞书消息卡片
+        curl -X POST "$FEISHU_WEBHOOK" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"msg_type\": \"interactive\",
+            \"card\": {
+              \"config\": {\"wide_screen_mode\": true},
+              \"header\": {
+                \"title\": {
+                  \"tag\": \"plain_text\",
+                  \"content\": \"🚨 ETF调仓信号 - ${{ env.SIGNAL_DATE }}\"
+                },
+                \"template\": \"red\"
+              },
+              \"elements\": [
+                {
+                  \"tag\": \"div\",
+                  \"text\": {
+                    \"tag\": \"lark_md\",
+                    \"content\": \"**⚠️ 检测到调仓信号，请关注！**\\n\\n**调仓详情：**\\n${REBALANCE_INFO}\\n\\n**当前持仓：**\\n${HOLDINGS_INFO}\"
+                  }
+                }
+              ]
+            }
+          }"
+
+    - name: Upload signal log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: signal-log-${{ github.run_id }}
+        path: signal_output.txt
+        retention-days: 7

@@ -46,7 +46,7 @@ def get_last_trading_day(date: datetime | None = None) -> datetime:
     return date
 
 
-def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_source):
+def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_source, cutoff_date: datetime | None = None):
     """
     获取策略候选池最新数据，智能更新缓存。
 
@@ -54,6 +54,7 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
     1. 计算所需历史数据长度（lookback + 缓冲）
     2. 智能判断缓存是否需要更新
     3. 仅获取必要的历史数据
+    4. 支持指定截止日，过滤掉截止日之后的数据
     """
     codes = [p.code for p in strategy.pool]
     names = {p.code: p.name for p in strategy.pool}
@@ -67,6 +68,10 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
     today = datetime.now()
     required_start = today - timedelta(days=lookback + buffer_days + 10)  # +10 应对节假日
     required_start_str = required_start.strftime("%Y%m%d")
+
+    # 确定截止日（默认上一个交易日）
+    if cutoff_date is None:
+        cutoff_date = get_last_trading_day()
 
     all_close = {}
     all_open = {}
@@ -101,6 +106,14 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
             print(f"  [下载] {code} ({name}) via {data_source.name}")
             try:
                 df = data_source.fetch(code, required_start_str)
+                # 下载成功后，先过滤截止日，再保存缓存
+                if df is not None and not df.empty:
+                    df_before_cutoff = df[df.index.date <= cutoff_date.date()]
+                    if len(df_before_cutoff) < len(df):
+                        print(f"  [过滤] {code} ({name}) 截断至 {cutoff_date.date()}，原 {len(df)} 条 -> {len(df_before_cutoff)} 条")
+                    df = df_before_cutoff
+                # 确保缓存目录存在
+                os.makedirs(os.path.dirname(cache_file), exist_ok=True)
                 df.to_csv(cache_file)
                 with open(meta_file, "w", encoding="utf-8") as f:
                     json.dump({"adjusted": data_source.adjusted}, f)
@@ -112,6 +125,13 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
                     print(f"  [回退] 使用缓存数据: {code} ({name})")
                 else:
                     raise
+
+        # 过滤截止日之后的数据（对缓存数据也执行）
+        if df is not None and not df.empty:
+            df_before_cutoff = df[df.index.date <= cutoff_date.date()]
+            if len(df_before_cutoff) < len(df):
+                print(f"  [过滤] {code} ({name}) 截断至 {cutoff_date.date()}，原 {len(df)} 条 -> {len(df_before_cutoff)} 条")
+            df = df_before_cutoff
 
         close_col = f"{code}_close"
         open_col = f"{code}_open"
@@ -248,7 +268,7 @@ def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_lis
     print(f"{'='*60}")
 
 
-def run_latest_signal(strategy: StrategyConfig, app_config: AppConfig, data_source):
+def run_latest_signal(strategy: StrategyConfig, app_config: AppConfig, data_source, cutoff_date: datetime | None = None):
     """
     执行单个策略的最新信号计算和打印。
     """
@@ -257,7 +277,7 @@ def run_latest_signal(strategy: StrategyConfig, app_config: AppConfig, data_sour
     print(f"  模式: {strategy.mode} | 参数: {strategy.params}")
     print(f"{'='*60}")
 
-    data = fetch_latest_data(strategy, app_config, data_source)
+    data = fetch_latest_data(strategy, app_config, data_source, cutoff_date)
     name_list = data["close"].columns.tolist()
 
     if strategy.mode == "rotation":
@@ -278,9 +298,21 @@ def main():
     parser = argparse.ArgumentParser(description="ETF 最新信号打印")
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
     parser.add_argument("--strategy", help="指定策略名称（默认运行所有启用策略）")
+    parser.add_argument("--date", help="指定交易截止日 (YYYYMMDD)，默认上一个交易日")
     args = parser.parse_args()
 
-    # 加载配置
+    # 解析指定日期
+    cutoff_date = None
+    if args.date:
+        try:
+            cutoff_date = datetime.strptime(args.date, "%Y%m%d")
+            print(f"[指定截止日] {cutoff_date.date()}")
+        except ValueError:
+            print(f"错误: 日期格式无效 '{args.date}'，请使用 YYYYMMDD 格式")
+            sys.exit(1)
+    else:
+        cutoff_date = get_last_trading_day()
+        print(f"[默认截止日] 上一个交易日: {cutoff_date.date()}")
     app_config = load_config(args.config)
     enabled_strategies = [s for s in app_config.strategies if s.enabled]
 
@@ -325,7 +357,7 @@ def main():
     # 运行启用的策略
     for strategy in enabled_strategies:
         try:
-            run_latest_signal(strategy, app_config, data_source)
+            run_latest_signal(strategy, app_config, data_source, cutoff_date)
         except Exception as e:
             print(f"\n[错误] 策略 '{strategy.name}' 执行失败: {e}")
             import traceback

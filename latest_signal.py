@@ -63,7 +63,7 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
 
     # 计算所需数据起始日
     lookback = strategy.params.get("lookback", 20)
-    buffer_days = 50  # 额外缓冲，确保有足够数据计算指标
+    buffer_days = 10  # 少量缓冲，确保有足够数据计算指标
 
     today = datetime.now()
     required_start = today - timedelta(days=lookback + buffer_days + 10)  # +10 应对节假日
@@ -85,20 +85,30 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
 
         need_download = True
         df = None
+        cache_sufficient = False
 
         if os.path.exists(cache_file):
-            # 检查缓存是否最新
+            # 检查缓存是否满足需求
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             if not df.empty:
-                last_date = df.index[-1]
-                last_trading = get_last_trading_day()
+                # 先过滤截止日，看实际可用数据
+                df_before_cutoff = df[df.index.date <= cutoff_date.date()]
+                last_date = df_before_cutoff.index[-1] if not df_before_cutoff.empty else None
 
-                # 如果缓存最新日期就是最近交易日，且数据足够，使用缓存
-                if last_date.date() >= last_trading.date() and len(df) >= lookback + buffer_days:
-                    print(f"  [缓存] {code} ({name}) 已是最新")
-                    need_download = False
+                if last_date is not None:
+                    # 判断缓存是否满足：最新日期 >= 截止日，且数据条数足够
+                    if last_date.date() >= cutoff_date.date() and len(df_before_cutoff) >= lookback + buffer_days:
+                        print(f"  [缓存] {code} ({name}) 已是最新")
+                        need_download = False
+                        cache_sufficient = True
+                        df = df_before_cutoff
+                    else:
+                        if last_date.date() < cutoff_date.date():
+                            print(f"  [更新] {code} ({name}) 缓存最新日期 {last_date.date()} 早于截止日 {cutoff_date.date()}")
+                        elif len(df_before_cutoff) < lookback + buffer_days:
+                            print(f"  [更新] {code} ({name}) 缓存数据不足 ({len(df_before_cutoff)} < {lookback + buffer_days})")
                 else:
-                    print(f"  [更新] {code} ({name}) 缓存过期或数据不足")
+                    print(f"  [更新] {code} ({name}) 缓存无截止日之前的有效数据")
             else:
                 print(f"  [更新] {code} ({name}) 缓存为空")
 
@@ -131,12 +141,17 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
                 # 如果下载失败但缓存存在，回退使用缓存
                 if os.path.exists(cache_file):
                     df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                    df_before_cutoff = df[df.index.date <= cutoff_date.date()]
+                    if len(df_before_cutoff) < len(df):
+                        print(f"  [过滤] {code} ({name}) 截断至 {cutoff_date.date()}，原 {len(df)} 条 -> {len(df_before_cutoff)} 条")
+                    df = df_before_cutoff
                     print(f"  [回退] 使用缓存数据: {code} ({name})")
                 else:
                     raise
 
-        # 过滤截止日之后的数据（对缓存数据也执行）
-        if df is not None and not df.empty:
+        # 缓存已满足需求，无需再过滤
+        if not cache_sufficient and df is not None and not df.empty:
+            # 再次确认数据已过滤（防御性编程）
             df_before_cutoff = df[df.index.date <= cutoff_date.date()]
             if len(df_before_cutoff) < len(df):
                 print(f"  [过滤] {code} ({name}) 截断至 {cutoff_date.date()}，原 {len(df)} 条 -> {len(df_before_cutoff)} 条")

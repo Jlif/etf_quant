@@ -118,7 +118,16 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
                 with open(meta_file, "w", encoding="utf-8") as f:
                     json.dump({"adjusted": data_source.adjusted}, f)
             except Exception as e:
-                print(f"  [警告] {code} ({name}) 下载失败: {e}")
+                error_msg = str(e)
+                # 简化错误信息，避免打印过长的异常详情
+                if "RemoteDisconnected" in error_msg:
+                    print(f"  [警告] {code} ({name}) 网络连接失败，尝试回退缓存")
+                elif "腾讯接口" in error_msg:
+                    # 提取腾讯接口的关键信息
+                    tencent_msg = error_msg.split("腾讯接口")[-1].strip()
+                    print(f"  [警告] {code} ({name}) 腾讯接口{tencent_msg}，尝试回退缓存")
+                else:
+                    print(f"  [警告] {code} ({name}) 下载失败: {error_msg[:100]}")
                 # 如果下载失败但缓存存在，回退使用缓存
                 if os.path.exists(cache_file):
                     df = pd.read_csv(cache_file, index_col=0, parse_dates=True)

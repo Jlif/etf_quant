@@ -115,5 +115,10 @@ class AkshareDataSource(BaseDataSource):
         try:
             return self._fetch_em(code, start, end)
         except Exception as e:
-            print(f"  [akshare] 东方财富获取 {code} 失败: {e}，尝试腾讯...")
+            error_msg = str(e)
+            # 简化网络错误信息
+            if "RemoteDisconnected" in error_msg or "Connection aborted" in error_msg:
+                print(f"  [akshare] 东方财富获取 {code} 网络连接失败，尝试腾讯...")
+            else:
+                print(f"  [akshare] 东方财富获取 {code} 失败: {error_msg[:80]}...，尝试腾讯...")
         return self._fetch_tencent(code, start, end)

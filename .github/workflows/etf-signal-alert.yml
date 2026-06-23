@@ -45,12 +45,7 @@ jobs:
         # 发送完整消息到飞书
         curl -s -X POST "$FEISHU_WEBHOOK" \
           -H "Content-Type: application/json" \
-          -d "{
-            \"msg_type\": \"text\",
-            \"content\": {
-              \"text\": \"$SIGNAL_TEXT\"
-            }
-          }"
+          -d "{\"param\":\"$SIGNAL_TEXT\"}"
 
     - name: Upload signal log
       if: always()

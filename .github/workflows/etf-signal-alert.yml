@@ -40,18 +40,20 @@ jobs:
 
         # 提取信号日期
         SIGNAL_DATE=$(grep '信号日期:' signal_output.txt | head -1 | sed 's/信号日期: //' | xargs)
-        echo "SIGNAL_DATE=$SIGNAL_DATE" >> $GITHUB_ENV
+        echo "SIGNAL_DATE=$SIGNAL_DATE" >> "$GITHUB_ENV"
 
         # 提取完整的信号内容（从"今日交易信号"到最后的分隔线）
-        # 使用 sed 提取关键部分
         sed -n '/【今日交易信号】/,/============================================================/p' signal_output.txt | head -60 > signal_content.txt
 
         # 检查是否有调仓（买入/卖出）
-        BUY_SELL_COUNT=$(grep -cE '\[买入\]|\[卖出\]' signal_output.txt || echo '0')
-        echo "HAS_REBALANCE=$BUY_SELL_COUNT" >> $GITHUB_ENV
+        if grep -qE '\[买入\]|\[卖出\]' signal_output.txt; then
+          echo "HAS_REBALANCE=true" >> "$GITHUB_ENV"
+        else
+          echo "HAS_REBALANCE=false" >> "$GITHUB_ENV"
+        fi
 
     - name: Send Feishu webhook alert
-      if: env.HAS_REBALANCE != '0'
+      if: env.HAS_REBALANCE == 'true'
       env:
         FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
       run: |

@@ -39,12 +39,8 @@ jobs:
         # 运行信号脚本，捕获完整输出
         python latest_signal.py --config config.yaml 2>&1 | tee signal_output.txt
 
-    - name: Send Feishu webhook
-      env:
-        FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
-      run: |
         # 读取完整输出并转义
-        SIGNAL_TEXT=$(cat signal_output.txt | sed 's/"/\\"/g' | sed 's/\\n/\\\\n/g')
+        SIGNAL_TEXT=$(cat signal_output.txt | sed 's/"/\\"/g')
 
         # 发送完整消息到飞书
         curl -s -X POST "$FEISHU_WEBHOOK" \

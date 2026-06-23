@@ -44,13 +44,14 @@ jobs:
         # 运行信号脚本，捕获完整输出
         python latest_signal.py --config config.yaml 2>&1 | tee signal_output.txt
 
-        # 截取从"【今日交易信号】"开始到末尾的内容
-        SIGNAL_TEXT=$(sed -n '/【今日交易信号】/,$p' signal_output.txt | sed 's/"/\\"/g')
+        # 截取从"【今日交易信号】"开始到末尾的内容，并将换行符替换为\n
+        SIGNAL_TEXT=$(sed -n '/【今日交易信号】/,$p' signal_output.txt | sed 's/"/\\"/g' | tr '\n' '\\n')
 
-        # 发送完整消息到飞书
-        curl -s -X POST "$FEISHU_WEBHOOK" \
+        # 发送完整消息到飞书（静默模式，避免进度信息污染日志）
+        curl -s -X POST \
           -H "Content-Type: application/json" \
-          -d "{\"param\":\"$SIGNAL_TEXT\"}"
+          -d "{\"param\":\"$SIGNAL_TEXT\"}" \
+          "$FEISHU_WEBHOOK"
 
     - name: Upload signal log
       if: always()

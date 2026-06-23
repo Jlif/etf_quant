@@ -32,57 +32,27 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run signal generation
-      id: signal
-      run: |
-        # 运行最新信号脚本，捕获输出
-        python latest_signal.py --config config.yaml 2>&1 | tee signal_output.txt
-
-        # 提取信号日期
-        SIGNAL_DATE=$(grep '信号日期:' signal_output.txt | head -1 | sed 's/信号日期: //' | xargs)
-        echo "SIGNAL_DATE=$SIGNAL_DATE" >> "$GITHUB_ENV"
-
-        # 提取完整的信号内容（从"今日交易信号"到最后的分隔线）
-        sed -n '/【今日交易信号】/,/============================================================/p' signal_output.txt | head -60 > signal_content.txt
-
-        # 检查是否有调仓（买入/卖出）
-        if grep -qE '\[买入\]|\[卖出\]' signal_output.txt; then
-          echo "HAS_REBALANCE=true" >> "$GITHUB_ENV"
-        else
-          echo "HAS_REBALANCE=false" >> "$GITHUB_ENV"
-        fi
-
-    - name: Send Feishu webhook alert
-      if: env.HAS_REBALANCE == 'true'
+    - name: Run signal and send alert
       env:
         FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
       run: |
-        # 读取完整的信号内容
-        SIGNAL_CONTENT=$(cat signal_content.txt | sed 's/"/\\"/g' | tr '\n' '\\n')
+        # 运行信号脚本，捕获完整输出
+        python latest_signal.py --config config.yaml 2>&1 | tee signal_output.txt
 
-        # 构建飞书消息卡片，发送原始格式的信号内容
-        curl -X POST "$FEISHU_WEBHOOK" \
+    - name: Send Feishu webhook
+      env:
+        FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      run: |
+        # 读取完整输出并转义
+        SIGNAL_TEXT=$(cat signal_output.txt | sed 's/"/\\"/g' | sed 's/\\n/\\\\n/g')
+
+        # 发送完整消息到飞书
+        curl -s -X POST "$FEISHU_WEBHOOK" \
           -H "Content-Type: application/json" \
           -d "{
-            \"msg_type\": \"interactive\",
-            \"card\": {
-              \"config\": {\"wide_screen_mode\": true},
-              \"header\": {
-                \"title\": {
-                  \"tag\": \"plain_text\",
-                  \"content\": \"🚨 ETF调仓信号 - ${{ env.SIGNAL_DATE }}\"
-                },
-                \"template\": \"red\"
-              },
-              \"elements\": [
-                {
-                  \"tag\": \"div\",
-                  \"text\": {
-                    \"tag\": \"lark_md\",
-                    \"content\": \"**⚠️ 检测到调仓信号，请关注！**\\n\\n\`\`\`\\n${SIGNAL_CONTENT}\\n\`\`\`\"
-                  }
-                }
-              ]
+            \"msg_type\": \"text\",
+            \"content\": {
+              \"text\": \"$SIGNAL_TEXT\"
             }
           }"
 

@@ -38,30 +38,27 @@ jobs:
         # 运行最新信号脚本，捕获输出
         python latest_signal.py --config config.yaml 2>&1 | tee signal_output.txt
 
-        # 提取关键信号信息用于webhook
+        # 提取信号日期
         SIGNAL_DATE=$(grep '信号日期:' signal_output.txt | head -1 | sed 's/信号日期: //' | xargs)
         echo "SIGNAL_DATE=$SIGNAL_DATE" >> $GITHUB_ENV
+
+        # 提取完整的信号内容（从"今日交易信号"到最后的分隔线）
+        # 使用 sed 提取关键部分
+        sed -n '/【今日交易信号】/,/============================================================/p' signal_output.txt | head -60 > signal_content.txt
 
         # 检查是否有调仓（买入/卖出）
         BUY_SELL_COUNT=$(grep -cE '\[买入\]|\[卖出\]' signal_output.txt || echo '0')
         echo "HAS_REBALANCE=$BUY_SELL_COUNT" >> $GITHUB_ENV
-
-        # 提取持仓变化部分
-        grep -A 10 '持仓变化:' signal_output.txt > rebalance_info.txt || true
-
-        # 提取操作建议部分
-        grep -A 10 '操作建议:' signal_output.txt > holdings_info.txt || true
 
     - name: Send Feishu webhook alert
       if: env.HAS_REBALANCE != '0'
       env:
         FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
       run: |
-        # 读取调仓信息
-        REBALANCE_INFO=$(cat rebalance_info.txt | sed 's/"/\\"/g' | tr '\n' '\\n')
-        HOLDINGS_INFO=$(cat holdings_info.txt | sed 's/"/\\"/g' | tr '\n' '\\n')
+        # 读取完整的信号内容
+        SIGNAL_CONTENT=$(cat signal_content.txt | sed 's/"/\\"/g' | tr '\n' '\\n')
 
-        # 构建飞书消息卡片
+        # 构建飞书消息卡片，发送原始格式的信号内容
         curl -X POST "$FEISHU_WEBHOOK" \
           -H "Content-Type: application/json" \
           -d "{
@@ -80,7 +77,7 @@ jobs:
                   \"tag\": \"div\",
                   \"text\": {
                     \"tag\": \"lark_md\",
-                    \"content\": \"**⚠️ 检测到调仓信号，请关注！**\\n\\n**调仓详情：**\\n${REBALANCE_INFO}\\n\\n**当前持仓：**\\n${HOLDINGS_INFO}\"
+                    \"content\": \"**⚠️ 检测到调仓信号，请关注！**\\n\\n\`\`\`\\n${SIGNAL_CONTENT}\\n\`\`\`\"
                   }
                 }
               ]

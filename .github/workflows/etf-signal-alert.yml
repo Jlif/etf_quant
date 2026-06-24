@@ -72,10 +72,8 @@ jobs:
             print("未找到信号内容，跳过推送")
             raise SystemExit(0)
 
-        payload = {
-            "msg_type": "text",
-            "content": {"text": text},
-        }
+        # 飞书流程 webhook 只需要 { "param": "..." }
+        payload = {"param": text}
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
         req = urllib.request.Request(

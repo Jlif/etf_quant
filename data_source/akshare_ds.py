@@ -11,7 +11,7 @@ from .base import BaseDataSource
 
 
 class AkshareDataSource(BaseDataSource):
-    """akshare 数据源：优先东方财富，失败时回退到腾讯（前复权）。"""
+    """akshare 数据源：优先东方财富，失败后回退腾讯/新浪，最后 yfinance。"""
 
     name = "akshare"
 
@@ -111,6 +111,42 @@ class AkshareDataSource(BaseDataSource):
         self.adjusted = True
         return df
 
+    def _fetch_sina(self, code: str, start: str, end: str | None) -> pd.DataFrame:
+        """新浪财经数据源（未复权），作为腾讯失败/滞后的 fallback。"""
+        import akshare as ak
+
+        symbol = self._to_exchange_symbol(code)
+        df = ak.fund_etf_hist_sina(symbol=symbol)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date").sort_index()
+        df = df[["open", "high", "low", "close"]].astype(float).rename(
+            columns={
+                "open": f"{code}_open",
+                "high": f"{code}_high",
+                "low": f"{code}_low",
+                "close": f"{code}_close",
+            }
+        )
+
+        start_dt = pd.to_datetime(start)
+        df = df[df.index >= start_dt]
+        if end:
+            end_dt = pd.to_datetime(end)
+            df = df[df.index <= end_dt]
+
+        if df.empty:
+            raise RuntimeError(f"新浪接口在 {start} ~ {end or '今'} 范围内无数据")
+
+        if df.index[0] > start_dt:
+            print(
+                f"  [新浪] {code} 数据仅回溯至 {df.index[0].date()}，"
+                f"无法覆盖 {start_dt.date()}"
+            )
+
+        # 新浪返回未复权价格
+        self.adjusted = False
+        return df
+
     def fetch(self, code: str, start: str, end: str | None = None) -> pd.DataFrame:
         try:
             return self._fetch_em(code, start, end)
@@ -121,4 +157,48 @@ class AkshareDataSource(BaseDataSource):
                 print(f"  [akshare] 东方财富获取 {code} 网络连接失败，尝试腾讯...")
             else:
                 print(f"  [akshare] 东方财富获取 {code} 失败: {error_msg[:80]}...，尝试腾讯...")
-        return self._fetch_tencent(code, start, end)
+
+        # 第一层 fallback：腾讯
+        df = None
+        try:
+            df = self._fetch_tencent(code, start, end)
+            if not self._is_stale(df, end):
+                return df
+            print(f"  [akshare] 腾讯数据滞后至 {df.index[-1].date()}，尝试新浪...")
+        except Exception as e:
+            print(f"  [akshare] 腾讯获取 {code} 失败: {e}，尝试新浪...")
+
+        # 第二层 fallback：新浪
+        try:
+            df = self._fetch_sina(code, start, end)
+            if not self._is_stale(df, end):
+                print(f"  [akshare] 已使用新浪数据，最新 {df.index[-1].date()}")
+                return df
+            print(f"  [akshare] 新浪数据滞后至 {df.index[-1].date()}，尝试 yfinance...")
+        except Exception as e:
+            print(f"  [akshare] 新浪获取 {code} 失败: {e}，尝试 yfinance...")
+
+        # 第三层 fallback：yfinance（用于国内接口均缺失/滞后的标的，如 159915）
+        try:
+            from .yfinance_ds import YFinanceDataSource
+
+            yf_ds = YFinanceDataSource()
+            df_yf = yf_ds.fetch(code, start, end)
+            if not df_yf.empty:
+                print(f"  [akshare] 已使用 yfinance 数据，最新 {df_yf.index[-1].date()}")
+                self.adjusted = yf_ds.adjusted
+                return df_yf
+        except Exception as e:
+            print(f"  [akshare] yfinance 获取 {code} 失败: {e}")
+
+        if df is not None:
+            return df
+        raise RuntimeError(f"无法通过东方财富/腾讯/新浪/yfinance 获取 {code} 数据")
+
+    def _is_stale(self, df: pd.DataFrame, end: str | None = None) -> bool:
+        """判断 df 的最新日期是否早于预期截止日（默认今天）。"""
+        if df.empty:
+            return True
+        latest = df.index[-1].date()
+        expected = pd.to_datetime(end).date() if end else pd.Timestamp.now().date()
+        return latest < expected

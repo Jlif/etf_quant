@@ -82,7 +82,7 @@ strategies:
       - { code: "159915", name: "创业板ETF" }
       - { code: "513100", name: "纳指ETF" }
       - { code: "518880", name: "黄金ETF" }
-      - { code: "515810", name: "中证800ETF易方达" }
+      - { code: "515800", name: "中证800ETF" }
     params:
       lookback: 22
       scoring: momentum      # momentum | slope_r2 | momentum_quality

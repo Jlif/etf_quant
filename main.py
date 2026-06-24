@@ -8,6 +8,7 @@ ETF 轮动策略回测系统入口
 用法:
     python main.py
     python main.py --config my_config.yaml
+    python main.py --today
 """
 
 from __future__ import annotations
@@ -88,8 +89,19 @@ def detect_and_fix_price_jumps(
     return fixed
 
 
-def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source):
-    """获取策略候选池数据，自动对齐起始日期"""
+def fetch_pool_data(
+    strategy: StrategyConfig,
+    app_config: AppConfig,
+    data_source,
+    include_today: bool = False,
+):
+    """获取策略候选池数据，自动对齐起始日期。
+
+    Parameters
+    ----------
+    include_today : bool
+        为 True 时强制重新拉取数据，确保包含最新行情（含当天）。
+    """
     codes = [p.code for p in strategy.pool]
     names = {p.code: p.name for p in strategy.pool}
     cache_dir = app_config.backtest.cache_dir
@@ -109,7 +121,7 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
         cache_file = os.path.join(cache_dir, f"{code}_{data_source.name}.csv")
         meta_file = cache_file + ".meta.json"
 
-        if os.path.exists(cache_file):
+        if os.path.exists(cache_file) and not include_today:
             print(f"  [缓存] {code} ({name})")
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             close_col = f"{code}_close"
@@ -124,7 +136,8 @@ def fetch_pool_data(strategy: StrategyConfig, app_config: AppConfig, data_source
                     meta = json.load(f)
                 data_source.adjusted = meta.get("adjusted", True)
         else:
-            print(f"  [下载] {code} ({name}) via {data_source.name}")
+            action = "刷新" if include_today and os.path.exists(cache_file) else "下载"
+            print(f"  [{action}] {code} ({name}) via {data_source.name}")
             df = data_source.fetch(code, target_start)
             df.to_csv(cache_file)
             with open(meta_file, "w", encoding="utf-8") as f:
@@ -203,6 +216,7 @@ def run_strategy(
     data_source,
     silent: bool = False,
     data: dict | None = None,
+    include_today: bool = False,
 ):
     """执行单个策略回测
 
@@ -214,6 +228,8 @@ def run_strategy(
     data : dict | None
         预加载的池数据（由 fetch_pool_data 返回）。传入后可避免重复读取缓存，
         在参数扫描等批量场景下减少 I/O 和日志输出。
+    include_today : bool
+        为 True 时强制重新拉取数据，确保包含最新行情（含当天）。
     """
     if not silent:
         print(f"\n{'='*60}")
@@ -222,7 +238,7 @@ def run_strategy(
         print(f"{'='*60}")
 
     if data is None:
-        data = fetch_pool_data(strategy, app_config, data_source)
+        data = fetch_pool_data(strategy, app_config, data_source, include_today=include_today)
     name_list = data["close"].columns.tolist()
 
     if strategy.mode == "rotation":
@@ -463,6 +479,11 @@ def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, 
 def main():
     parser = argparse.ArgumentParser(description="ETF 轮动策略回测")
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
+    parser.add_argument(
+        "--today",
+        action="store_true",
+        help="拉取当天最新行情数据（默认使用缓存/历史数据）",
+    )
     args = parser.parse_args()
 
     # 加载配置
@@ -492,9 +513,11 @@ def main():
         code for code in required_codes
         if not os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
     ]
-    skip_test = not missing_codes
+    skip_test = not missing_codes and not args.today
     if skip_test:
         print(f"[缓存] 所有 {len(required_codes)} 个 ETF 已缓存，跳过数据源连通性测试")
+    elif args.today:
+        print(f"[刷新] 将重新拉取 {len(required_codes)} 个 ETF 的最新行情数据")
 
     # 初始化数据源
     data_source = get_data_source(
@@ -510,7 +533,7 @@ def main():
         if not strategy.enabled:
             print(f"\n[跳过] 策略 '{strategy.name}' (enabled=false)")
             continue
-        result, name_list = run_strategy(strategy, app_config, data_source)
+        result, name_list = run_strategy(strategy, app_config, data_source, include_today=args.today)
         all_results[strategy.name] = (result, name_list)
         nav_series[strategy.name] = result["轮动策略净值"]
 

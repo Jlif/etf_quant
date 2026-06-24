@@ -10,6 +10,7 @@ ETF 最新信号打印工具
     python latest_signal.py
     python latest_signal.py --config my_config.yaml
     python latest_signal.py --strategy "动量轮动策略"
+    python latest_signal.py --today
 """
 
 from __future__ import annotations
@@ -66,7 +67,10 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
     buffer_days = 10  # 少量缓冲，确保有足够数据计算指标
 
     today = datetime.now()
-    required_start = today - timedelta(days=lookback + buffer_days + 10)  # +10 应对节假日
+    required_trading_days = lookback + buffer_days
+    # 交易日约占日历日的 ~5/7，2 倍余量可覆盖周末和节假日
+    calendar_days = int(required_trading_days * 2) + 5
+    required_start = today - timedelta(days=calendar_days)
     required_start_str = required_start.strftime("%Y%m%d")
 
     # 确定截止日（默认上一个交易日）
@@ -195,7 +199,12 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
     }
 
 
-def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_list: list[str]):
+def print_latest_signal(
+    strategy: StrategyConfig,
+    result: pd.DataFrame,
+    name_list: list[str],
+    last_quote_dates: dict[str, str] | None = None,
+):
     """
     打印最新交易信号，方便实盘操作。
 
@@ -216,8 +225,8 @@ def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_lis
         scoring = strategy.params.get("scoring", "momentum")
         prefix = "得分_" if scoring == "slope_r2" else "涨幅_"
 
-        print(f"{'排名':<4} {'ETF名称':<20} {'代码':<10} {'周期动量得分':<12} {'建议仓位':<10}")
-        print(f"{'-'*60}")
+        print(f"{'排名':<4} {'ETF名称':<20} {'代码':<10} {'最新行情日':<12} {'周期动量得分':<12} {'建议仓位':<10}")
+        print(f"{'-'*72}")
 
         # 按得分排序
         scores = []
@@ -227,15 +236,16 @@ def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_lis
             weight = latest[f"权重_{name}"] if f"权重_{name}" in latest else 0
             # 获取代码
             code = next((p.code for p in strategy.pool if p.name == name), "")
-            scores.append((name, code, score, weight))
+            last_date = last_quote_dates.get(name, "-") if last_quote_dates else "-"
+            scores.append((name, code, last_date, score, weight))
 
-        scores.sort(key=lambda x: x[2], reverse=True)
+        scores.sort(key=lambda x: x[3], reverse=True)
 
-        for i, (name, code, score, weight) in enumerate(scores, 1):
+        for i, (name, code, last_date, score, weight) in enumerate(scores, 1):
             marker = "★" if weight > 0 else " "
             weight_pct = f"{weight*100:.0f}%" if weight > 0 else "0%"
             score_str = f"{score:+.2%}" if scoring == "momentum" else f"{score:.4f}"
-            print(f"{marker}{i:<3} {name:<20} {code:<10} {score_str:<12} {weight_pct:<10}")
+            print(f"{marker}{i:<3} {name:<20} {code:<10} {last_date:<12} {score_str:<12} {weight_pct:<10}")
 
         # 显示持仓变化
         if prev is not None:
@@ -304,6 +314,12 @@ def run_latest_signal(strategy: StrategyConfig, app_config: AppConfig, data_sour
     data = fetch_latest_data(strategy, app_config, data_source, cutoff_date)
     name_list = data["close"].columns.tolist()
 
+    # 记录每只 ETF 的最新行情日，便于识别数据来源是否滞后
+    last_quote_dates = {
+        name: data["close"][name].last_valid_index().strftime("%Y-%m-%d")
+        for name in name_list
+    }
+
     if strategy.mode == "rotation":
         result = rotation.run(data, name_list, strategy.params)
     elif strategy.mode == "weighted":
@@ -313,7 +329,7 @@ def run_latest_signal(strategy: StrategyConfig, app_config: AppConfig, data_sour
         raise ValueError(f"不支持的模式: {strategy.mode}")
 
     # 仅打印最新信号，不生成报告
-    print_latest_signal(strategy, result, name_list)
+    print_latest_signal(strategy, result, name_list, last_quote_dates)
 
     return result, name_list
 
@@ -323,11 +339,19 @@ def main():
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
     parser.add_argument("--strategy", help="指定策略名称（默认运行所有启用策略）")
     parser.add_argument("--date", help="指定交易截止日 (YYYYMMDD)，默认上一个交易日")
+    parser.add_argument(
+        "--today",
+        action="store_true",
+        help="使用当天作为截止日并拉取最新行情数据（默认上一个交易日）",
+    )
     args = parser.parse_args()
 
     # 解析指定日期
     cutoff_date = None
-    if args.date:
+    if args.today:
+        cutoff_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        print(f"[指定截止日] 当天: {cutoff_date.date()}")
+    elif args.date:
         try:
             cutoff_date = datetime.strptime(args.date, "%Y%m%d")
             print(f"[指定截止日] {cutoff_date.date()}")

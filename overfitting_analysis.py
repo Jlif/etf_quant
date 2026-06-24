@@ -75,7 +75,7 @@ def _format_params(params: dict) -> str:
     return ", ".join(parts)
 
 
-def load_data_once(config_path: str):
+def load_data_once(config_path: str, include_today: bool = False):
     """加载配置并一次性获取数据。"""
     app_config = load_config(config_path)
     enabled_strategies = [s for s in app_config.strategies if s.enabled]
@@ -96,10 +96,10 @@ def load_data_once(config_path: str):
         for code in required_codes
         if not os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
     ]
-    skip_test = not missing_codes
+    skip_test = not missing_codes and not include_today
 
     data_source = get_data_source(name=provider, fallback=True, skip_test=skip_test)
-    data = fetch_pool_data(strategy, app_config, data_source)
+    data = fetch_pool_data(strategy, app_config, data_source, include_today=include_today)
     return app_config, strategy, data_source, data
 
 
@@ -913,6 +913,11 @@ def main():
     )
     parser.add_argument("--plot", action="store_true", default=True, help="生成图表")
     parser.add_argument("--no-plot", dest="plot", action="store_false", help="不生成图表")
+    parser.add_argument(
+        "--today",
+        action="store_true",
+        help="拉取当天最新行情数据（默认使用缓存/历史数据）",
+    )
     args = parser.parse_args()
 
     skip = {s.strip().lower() for s in args.skip_tests.split(",") if s.strip()}
@@ -921,7 +926,7 @@ def main():
     print("ETF 轮动策略过拟合检测")
     print("=" * 60)
 
-    app_config, strategy, data_source, data = load_data_once(args.config)
+    app_config, strategy, data_source, data = load_data_once(args.config, include_today=args.today)
     current_params = dict(strategy.params)
 
     results: list[TestResult] = []

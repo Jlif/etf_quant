@@ -169,6 +169,11 @@ def main():
     parser.add_argument("--lookback-step", type=int, default=5, help="lookback 步长")
     parser.add_argument("--output", default="output/lookback_sweep.csv", help="CSV 输出路径")
     parser.add_argument("--chart", default="output/lookback_sweep.png", help="图表输出路径")
+    parser.add_argument(
+        "--today",
+        action="store_true",
+        help="拉取当天最新行情数据（默认使用缓存/历史数据）",
+    )
     args = parser.parse_args()
 
     app_config = load_config(args.config)
@@ -202,7 +207,7 @@ def main():
         for code in required_codes
         if not os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
     ]
-    skip_test = not missing_codes
+    skip_test = not missing_codes and not args.today
 
     data_source = get_data_source(
         name=provider,
@@ -211,7 +216,7 @@ def main():
     )
 
     # 预加载一次数据，避免每个 lookback 都重复读取缓存
-    data = fetch_pool_data(strategy, app_config, data_source)
+    data = fetch_pool_data(strategy, app_config, data_source, include_today=args.today)
     results = sweep_lookback(strategy, app_config, data_source, lookback_values, data=data)
     print_results(results)
 

@@ -260,6 +260,11 @@ def main():
         choices=["total", "cagr", "max_dd", "sharpe"],
         help="结果排序依据",
     )
+    parser.add_argument(
+        "--today",
+        action="store_true",
+        help="拉取当天最新行情数据（默认使用缓存/历史数据）",
+    )
     args = parser.parse_args()
 
     app_config = load_config(args.config)
@@ -296,7 +301,7 @@ def main():
         for code in required_codes
         if not os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
     ]
-    skip_test = not missing_codes
+    skip_test = not missing_codes and not args.today
 
     data_source = get_data_source(
         name=provider,
@@ -304,7 +309,7 @@ def main():
         skip_test=skip_test,
     )
 
-    data = fetch_pool_data(strategy, app_config, data_source)
+    data = fetch_pool_data(strategy, app_config, data_source, include_today=args.today)
     results = sweep_risk_params(
         strategy=strategy,
         app_config=app_config,

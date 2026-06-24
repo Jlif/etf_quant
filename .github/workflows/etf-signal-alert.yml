@@ -9,6 +9,9 @@ on:
 jobs:
   signal-alert:
     runs-on: ubuntu-latest
+    # 让 runner 步骤里的 date/python 都按北京时间执行/显示
+    env:
+      TZ: Asia/Shanghai
 
     steps:
     - name: Checkout code
@@ -37,12 +40,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: Print runner time
+      run: date
+
     - name: Run signal and send alert
       env:
         FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
       run: |
-        # 运行信号脚本，捕获完整输出
-        python latest_signal.py --config config.yaml 2>&1 | tee signal_output.txt
+        # 运行信号脚本，捕获完整输出（--today 拉取当天最新行情）
+        python latest_signal.py --config config.yaml --today 2>&1 | tee signal_output.txt
 
         # 截取从"【今日交易信号】"开始到末尾的内容，并将换行符替换为\n
         SIGNAL_TEXT=$(sed -n '/【今日交易信号】/,$p' signal_output.txt | sed 's/"/\\"/g' | tr '\n' '\\n')

@@ -22,12 +22,26 @@ import sys
 from datetime import datetime, timedelta
 
 import pandas as pd
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from data_source import get_data_source
 from strategy import rotation, weighted
 from utils import load_config, AppConfig, StrategyConfig
+
+
+def _display_width(s: str) -> int:
+    """计算字符串在终端中的显示宽度（中文等宽字符按 2 计）。"""
+    return sum(
+        2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+        for ch in str(s)
+    )
+
+
+def _ljust(s: str, width: int) -> str:
+    """按显示宽度左对齐。"""
+    return s + " " * max(0, width - _display_width(s))
 
 
 def is_trading_day(date: datetime) -> bool:
@@ -225,8 +239,16 @@ def print_latest_signal(
         scoring = strategy.params.get("scoring", "momentum")
         prefix = "得分_" if scoring == "slope_r2" else "涨幅_"
 
-        print(f"{'排名':<4} {'ETF名称':<20} {'代码':<10} {'最新行情日':<12} {'周期动量得分':<12} {'建议仓位':<10}")
-        print(f"{'-'*72}")
+        header = (
+            f"{_ljust('排名', 4)} "
+            f"{_ljust('ETF名称', 20)} "
+            f"{_ljust('代码', 10)} "
+            f"{_ljust('最新行情日', 12)} "
+            f"{_ljust('周期动量得分', 12)} "
+            f"{_ljust('建议仓位', 10)}"
+        )
+        print(header)
+        print("-" * 72)
 
         # 按得分排序
         scores = []
@@ -245,7 +267,16 @@ def print_latest_signal(
             marker = "★" if weight > 0 else " "
             weight_pct = f"{weight*100:.0f}%" if weight > 0 else "0%"
             score_str = f"{score:+.2%}" if scoring == "momentum" else f"{score:.4f}"
-            print(f"{marker}{i:<3} {name:<20} {code:<10} {last_date:<12} {score_str:<12} {weight_pct:<10}")
+            rank_str = f"{marker}{i}"
+            row = (
+                f"{_ljust(rank_str, 4)} "
+                f"{_ljust(name, 20)} "
+                f"{_ljust(code, 10)} "
+                f"{_ljust(last_date, 12)} "
+                f"{_ljust(score_str, 12)} "
+                f"{_ljust(weight_pct, 10)}"
+            )
+            print(row)
 
         # 显示持仓变化
         if prev is not None:
@@ -287,14 +318,26 @@ def print_latest_signal(
 
     elif strategy.mode == "weighted":
         # 加权组合策略：显示目标权重
-        print(f"{'ETF名称':<20} {'代码':<10} {'目标权重':<10} {'当前权重':<10}")
-        print(f"{'-'*60}")
+        header = (
+            f"{_ljust('ETF名称', 20)} "
+            f"{_ljust('代码', 10)} "
+            f"{_ljust('目标权重', 10)} "
+            f"{_ljust('当前权重', 10)}"
+        )
+        print(header)
+        print("-" * 54)
 
         weights = {p.name: p.weight for p in strategy.pool}
         for name in name_list:
             code = next((p.code for p in strategy.pool if p.name == name), "")
             target = weights.get(name, 0)
-            print(f"{name:<20} {code:<10} {target:.0f}%")
+            row = (
+                f"{_ljust(name, 20)} "
+                f"{_ljust(code, 10)} "
+                f"{_ljust(f'{target:.0f}%', 10)} "
+                f"{_ljust('-', 10)}"
+            )
+            print(row)
 
         print(f"{'='*60}")
         print("操作建议: 按上述目标权重配置仓位")

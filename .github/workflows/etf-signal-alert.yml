@@ -50,14 +50,43 @@ jobs:
         # 运行信号脚本，捕获完整输出（--today 拉取当天最新行情）
         python latest_signal.py --config config.yaml --today 2>&1 | tee signal_output.txt
 
-        # 截取从"【今日交易信号】"开始到末尾的内容，并将换行符替换为\n
-        SIGNAL_TEXT=$(sed -n '/【今日交易信号】/,$p' signal_output.txt | sed 's/"/\\"/g' | tr '\n' '\\n')
+        # 用 Python 提取信号文本并发送标准飞书自定义机器人消息
+        python - <<'PY'
+        import json
+        import os
+        import urllib.request
 
-        # 发送完整消息到飞书（静默模式，避免进度信息污染日志）
-        curl -s -X POST \
-          -H "Content-Type: application/json" \
-          -d "{\"param\":\"$SIGNAL_TEXT\"}" \
-          "$FEISHU_WEBHOOK"
+        with open("signal_output.txt", "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        capture = False
+        text_lines = []
+        for line in lines:
+            if "【今日交易信号】" in line:
+                capture = True
+            if capture:
+                text_lines.append(line)
+
+        text = "".join(text_lines).strip()
+        if not text:
+            print("未找到信号内容，跳过推送")
+            raise SystemExit(0)
+
+        payload = {
+            "msg_type": "text",
+            "content": {"text": text},
+        }
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        req = urllib.request.Request(
+            os.environ["FEISHU_WEBHOOK"],
+            data=data,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            print(resp.read().decode("utf-8"))
+        PY
 
     - name: Upload signal log
       if: always()

@@ -351,8 +351,12 @@ def _build_rebalance_df(result: pd.DataFrame) -> pd.DataFrame | None:
     nav_col = "轮动策略净值"
     changes["换仓前净值"] = result[nav_col].shift(1).loc[changes.index]
     changes["换仓后净值"] = result[nav_col].loc[changes.index]
+    changes["当天涨跌幅"] = (
+        changes["换仓后净值"] / changes["换仓前净值"] - 1.0
+    )
+    changes["当天涨跌幅"] = changes["当天涨跌幅"].apply(lambda x: f"{x:+.2%}")
 
-    rebalance_df = changes[["持仓", "调出", "调入", "换仓前净值", "换仓后净值"]]
+    rebalance_df = changes[["持仓", "调出", "调入", "换仓前净值", "换仓后净值", "当天涨跌幅"]]
     rebalance_df.index.name = "日期"
     return rebalance_df
 

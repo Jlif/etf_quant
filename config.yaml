@@ -75,6 +75,7 @@ strategies:
     mode: rotation
     pool:
       - { code: "512040", name: "价值100ETF富国" }
+      - { code: "159263", name: "价值ETF易方达" }
       - { code: "510300", name: "沪深300ETF" }
       - { code: "510880", name: "红利ETF" }
       - { code: "511010", name: "国债ETF" }

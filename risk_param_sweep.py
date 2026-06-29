@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -27,6 +28,24 @@ from data_source import get_data_source
 from main import fetch_pool_data, run_strategy
 from param_sweep import compute_metrics
 from utils import load_config
+
+
+def _display_width(s: str) -> int:
+    """计算字符串在终端中的显示宽度（中文等宽字符按 2 计）。"""
+    return sum(
+        2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+        for ch in str(s)
+    )
+
+
+def _rjust(s: str, width: int) -> str:
+    """按显示宽度右对齐。"""
+    return " " * max(0, width - _display_width(s)) + s
+
+
+def _ljust(s: str, width: int) -> str:
+    """按显示宽度左对齐。"""
+    return s + " " * max(0, width - _display_width(s))
 
 
 @dataclass
@@ -178,23 +197,62 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
 
     sorted_results = sorted(results, key=sort_key, reverse=(sort_by != "max_dd"))
 
-    print("\n" + "=" * 150)
-    print(
-        f"{'lookback':>10} {'abs_lb':>8} {'vol_lb':>8} {'target_vol':>12} {'stop':>10} "
-        f"{'总收益':>12} {'CAGR':>12} {'最大回撤':>12} {'夏普':>10} {'最终净值':>12}"
-    )
-    print("-" * 150)
+    # 定义列宽（显示宽度，中文按2计）
+    col_widths = {
+        "lookback": 10,
+        "abs_lb": 8,
+        "vol_lb": 8,
+        "target_vol": 12,
+        "stop": 10,
+        "总收益": 12,
+        "CAGR": 12,
+        "最大回撤": 12,
+        "夏普": 10,
+        "最终净值": 12,
+    }
+
+    # 构建表头
+    headers = [
+        _rjust("lookback", col_widths["lookback"]),
+        _rjust("abs_lb", col_widths["abs_lb"]),
+        _rjust("vol_lb", col_widths["vol_lb"]),
+        _rjust("target_vol", col_widths["target_vol"]),
+        _rjust("stop", col_widths["stop"]),
+        _rjust("总收益", col_widths["总收益"]),
+        _rjust("CAGR", col_widths["CAGR"]),
+        _rjust("最大回撤", col_widths["最大回撤"]),
+        _rjust("夏普", col_widths["夏普"]),
+        _rjust("最终净值", col_widths["最终净值"]),
+    ]
+
+    total_width = sum(col_widths.values()) + len(col_widths) - 1
+    print("\n" + "=" * total_width)
+    print(" ".join(headers))
+    print("-" * total_width)
     for r in sorted_results:
         target_vol_str = f"{r.target_vol:.2%}" if r.target_vol is not None else "-"
         stop_str = f"{r.trailing_stop:.2%}" if r.trailing_stop is not None else "-"
         vol_lb_str = str(r.vol_lookback) if r.vol_lookback is not None else "-"
-        print(
-            f"{r.lookback:>10} {r.abs_momentum_lookback:>8} {vol_lb_str:>8} "
-            f"{target_vol_str:>12} {stop_str:>10} "
-            f"{r.total_return:>11.2%} {r.cagr:>11.2%} "
-            f"{r.max_drawdown:>11.2%} {r.sharpe:>10.2f} {r.final_nav:>12.4f}"
-        )
-    print("=" * 150)
+        total_return_str = f"{r.total_return:+.2%}"
+        cagr_str = f"{r.cagr:+.2%}"
+        max_dd_str = f"{r.max_drawdown:+.2%}"
+        sharpe_str = f"{r.sharpe:.2f}"
+        final_nav_str = f"{r.final_nav:.4f}"
+
+        row = [
+            _rjust(str(r.lookback), col_widths["lookback"]),
+            _rjust(str(r.abs_momentum_lookback), col_widths["abs_lb"]),
+            _rjust(vol_lb_str, col_widths["vol_lb"]),
+            _rjust(target_vol_str, col_widths["target_vol"]),
+            _rjust(stop_str, col_widths["stop"]),
+            _rjust(total_return_str, col_widths["总收益"]),
+            _rjust(cagr_str, col_widths["CAGR"]),
+            _rjust(max_dd_str, col_widths["最大回撤"]),
+            _rjust(sharpe_str, col_widths["夏普"]),
+            _rjust(final_nav_str, col_widths["最终净值"]),
+        ]
+        print(" ".join(row))
+    print("=" * total_width)
 
 
 def save_results_csv(results: list[SweepResult], path: str) -> None:
@@ -226,27 +284,27 @@ def main():
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
     parser.add_argument(
         "--lookbacks",
-        default="22,23,24",
+        default="22",
         help="lookback 列表，逗号分隔",
     )
     parser.add_argument(
         "--abs-lookbacks",
-        default="7,8,9",
+        default="9",
         help="absolute_momentum_lookback 列表，逗号分隔",
     )
     parser.add_argument(
         "--vol-lookbacks",
-        default="14,15,16",
+        default="26",
         help="volatility_lookback 列表，逗号分隔，none 表示用默认值",
     )
     parser.add_argument(
         "--target-vols",
-        default="0.07",
+        default="0.07,0.08,0.09,0.1,0.11,0.12,0.13,0.14,0.15",
         help="target_volatility 列表，逗号分隔，none 表示不启用",
     )
     parser.add_argument(
         "--trailing-stops",
-        default="0.08",
+        default="0.07",
         help="trailing_stop_pct 列表，逗号分隔，none 表示不启用",
     )
     parser.add_argument(

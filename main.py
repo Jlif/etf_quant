@@ -52,6 +52,11 @@ def _ljust(s: str, width: int) -> str:
     return s + " " * max(0, width - _display_width(s))
 
 
+def _rjust(s: str, width: int) -> str:
+    """按显示宽度右对齐。"""
+    return " " * max(0, width - _display_width(s)) + s
+
+
 def detect_and_fix_price_jumps(
     prices: pd.Series,
     name: str,
@@ -477,11 +482,31 @@ def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, 
     final_nav = result["轮动策略净值"].iloc[-1]
     total_return = final_nav - 1.0
 
-    print(f"\n{'='*60}")
+    # 定义列宽（显示宽度，中文按2计）
+    col_widths = {
+        "ETF名称": 18,
+        "代码": 10,
+        "持有天数": 10,
+        "累计贡献": 12,
+        "贡献占比": 12,
+    }
+
+    total_width = sum(col_widths.values()) + len(col_widths) - 1
+
+    print(f"\n{'='*total_width}")
     print(f"【持仓统计与收益贡献】{strategy.name}")
-    print(f"{'='*60}")
-    print(f"{'ETF名称':<18} {'代码':<10} {'持有天数':<8} {'累计贡献':<10} {'贡献占比':<10}")
-    print(f"{'-'*60}")
+    print(f"{'='*total_width}")
+
+    # 构建表头
+    headers = [
+        _ljust("ETF名称", col_widths["ETF名称"]),
+        _ljust("代码", col_widths["代码"]),
+        _ljust("持有天数", col_widths["持有天数"]),
+        _rjust("累计贡献", col_widths["累计贡献"]),
+        _rjust("贡献占比", col_widths["贡献占比"]),
+    ]
+    print(" ".join(headers))
+    print("-" * total_width)
 
     rows = []
     total_contribution = 0.0
@@ -505,16 +530,22 @@ def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, 
     rows_with_ratio.sort(key=lambda x: x[4], reverse=True)
 
     for name, code, hold_days, contribution, ratio in rows_with_ratio:
-        print(
-            f"{name:<18} {code:<10} {hold_days:<8} "
-            f"{contribution:>+10.2%} {ratio:>+9.1%}"
-        )
+        contrib_str = f"{contribution:+.2%}"
+        ratio_str = f"{ratio:+.1%}"
+        row = [
+            _ljust(name, col_widths["ETF名称"]),
+            _ljust(code, col_widths["代码"]),
+            _ljust(str(hold_days), col_widths["持有天数"]),
+            _rjust(contrib_str, col_widths["累计贡献"]),
+            _rjust(ratio_str, col_widths["贡献占比"]),
+        ]
+        print(" ".join(row))
 
-    print(f"{'-'*60}")
+    print("-" * total_width)
     print(f"合计贡献（简单加总口径）: {total_contribution:+.2%}")
     print(f"策略累计收益（复利口径）:   {total_return:+.2%}")
     print("  注：因复利再投资效应，简单加总的贡献合计会低于复利累计收益")
-    print(f"{'='*60}")
+    print(f"{'='*total_width}")
 
 
 def main():

@@ -95,7 +95,7 @@ strategies:
       absolute_momentum_threshold: 0.0
       safe_haven: "国债ETF"
       # 2. 目标波动率控制：当组合实际波动率超过目标值时，减仓并切换至 safe_haven
-      target_volatility: 0.1
+      target_volatility: 0.08
       volatility_lookback: 26
       # 3. 移动止损：持仓标的从高点回撤超过比例时强制清仓
       trailing_stop_pct: 0.07

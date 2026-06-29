@@ -299,7 +299,7 @@ def main():
     )
     parser.add_argument(
         "--target-vols",
-        default="0.07,0.08,0.09,0.1,0.11,0.12,0.13,0.14,0.15",
+        default="0.07,0.08,0.09,0.1",
         help="target_volatility 列表，逗号分隔，none 表示不启用",
     )
     parser.add_argument(

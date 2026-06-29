@@ -300,7 +300,7 @@ def run_strategy(
     )
 
     # 输出最新交易信号（用于实盘调仓）
-    print_latest_signal(strategy, result, name_list)
+    # print_latest_signal(strategy, result, name_list)
 
     # 输出各 ETF 持有天数与收益贡献占比（仅 rotation 策略）
     if strategy.mode == "rotation":

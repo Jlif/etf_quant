@@ -84,6 +84,7 @@ strategies:
       - { code: "513100", name: "纳指ETF" }
       - { code: "518880", name: "黄金ETF" }
       - { code: "515800", name: "中证800ETF" }
+      - { code: "512690", name: "酒ETF鹏华" }
     params:
       lookback: 22
       scoring: momentum      # momentum | slope_r2 | momentum_quality

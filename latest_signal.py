@@ -78,10 +78,18 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
 
     # 计算所需数据起始日
     lookback = strategy.params.get("lookback", 20)
-    buffer_days = 10  # 少量缓冲，确保有足够数据计算指标
+    buffer_days = 20  # 缓冲，覆盖 lookback + 风控窗口 + 周末节假日
+
+    # 考虑风控参数所需的历史长度
+    required_trading_days = max(
+        lookback,
+        strategy.params.get("absolute_momentum_lookback", 0)
+        if strategy.params.get("absolute_momentum_filter")
+        else 0,
+        strategy.params.get("volatility_lookback", 0),
+    ) + buffer_days
 
     today = datetime.now()
-    required_trading_days = lookback + buffer_days
     # 交易日约占日历日的 ~5/7，2 倍余量可覆盖周末和节假日
     calendar_days = int(required_trading_days * 2) + 5
     required_start = today - timedelta(days=calendar_days)
@@ -115,7 +123,7 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
 
                 if last_date is not None:
                     # 判断缓存是否满足：最新日期 >= 截止日，且数据条数足够
-                    if last_date.date() >= cutoff_date.date() and len(df_before_cutoff) >= lookback + buffer_days:
+                    if last_date.date() >= cutoff_date.date() and len(df_before_cutoff) >= required_trading_days:
                         print(f"  [缓存] {code} ({name}) 已是最新")
                         need_download = False
                         cache_sufficient = True
@@ -123,8 +131,8 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
                     else:
                         if last_date.date() < cutoff_date.date():
                             print(f"  [更新] {code} ({name}) 缓存最新日期 {last_date.date()} 早于截止日 {cutoff_date.date()}")
-                        elif len(df_before_cutoff) < lookback + buffer_days:
-                            print(f"  [更新] {code} ({name}) 缓存数据不足 ({len(df_before_cutoff)} < {lookback + buffer_days})")
+                        elif len(df_before_cutoff) < required_trading_days:
+                            print(f"  [更新] {code} ({name}) 缓存数据不足 ({len(df_before_cutoff)} < {required_trading_days})")
                 else:
                     print(f"  [更新] {code} ({name}) 缓存无截止日之前的有效数据")
             else:

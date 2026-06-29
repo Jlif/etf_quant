@@ -85,6 +85,8 @@ strategies:
       - { code: "518880", name: "黄金ETF" }
       - { code: "515800", name: "中证800ETF" }
       - { code: "512690", name: "酒ETF鹏华" }
+      # - { code: "159792", name: "港股通互联网ETF富国" }
+      # - { code: "159316", name: "港股通创新药ETF易方达" }
     params:
       lookback: 22
       scoring: momentum      # momentum | slope_r2 | momentum_quality

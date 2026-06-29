@@ -119,8 +119,8 @@ def volatility_target_filter(
     for name in name_list:
         portfolio_returns += adjusted[f"权重_{name}"] * returns[name]
 
-    # 滚动年化波动率
-    realized_vol = portfolio_returns.rolling(vol_lookback).std() * np.sqrt(252)
+    # 滚动年化波动率（min_periods=1 避免数据不足时全部返回 NaN，导致 fillna 成 1.0 失效）
+    realized_vol = portfolio_returns.rolling(vol_lookback, min_periods=1).std() * np.sqrt(252)
 
     # 缩放因子：实际波动率越高，仓位越低
     scale = (target_vol / realized_vol).fillna(1.0)

@@ -88,7 +88,7 @@ strategies:
     params:
       lookback: 22
       scoring: momentum      # momentum | slope_r2 | momentum_quality
-      top_n: 2
+      top_n: 1
       # 风控参数（均为可选，不配置时保持原始轮动行为）
       # 1. 绝对动量过滤（双重动量防守）：入选标的中自身动量为负的仓位自动切到 safe_haven
       absolute_momentum_filter: true

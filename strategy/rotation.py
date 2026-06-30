@@ -17,8 +17,10 @@ def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
     """Return the rolling window needed for an ETF type's adaptive scorer."""
     if etf_type == "行业股票":
         return 62
-    if etf_type == "红利":
+    if etf_type in {"红利", "自由现金流"}:
         return 41
+    if etf_type == "成长":
+        return 21
     if etf_type == "商品":
         return 61
     if etf_type == "宽基":

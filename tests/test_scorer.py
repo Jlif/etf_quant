@@ -30,6 +30,20 @@ def test_dividend_risk_adjusted_score():
     assert score > 0
 
 
+def test_free_cash_flow_uses_same_method_as_dividend():
+    prices = _price_series(np.linspace(100, 110, 41))
+    dividend = adaptive_momentum_score(prices, etf_type="红利", lookback=40)
+    fcf = adaptive_momentum_score(prices, etf_type="自由现金流", lookback=40)
+    assert fcf == pytest.approx(dividend)
+
+
+def test_growth_momentum_score():
+    # 近5日加速上涨的价格序列
+    prices = _price_series(np.concatenate([np.linspace(100, 105, 16), np.linspace(105, 120, 5)]))
+    score = adaptive_momentum_score(prices, etf_type="成长", lookback=20)
+    assert score > 0
+
+
 def test_commodity_trend_score():
     prices = _price_series(np.linspace(100, 120, 61))
     score = adaptive_momentum_score(prices, etf_type="商品", lookback=60)

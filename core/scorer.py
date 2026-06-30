@@ -145,6 +145,23 @@ def _breakout_score(srs: pd.Series, lookback: int = 252) -> float:
     return 1.0 if srs.iloc[-1] >= highest else 0.0
 
 
+def _growth_momentum_score(srs: pd.Series) -> float:
+    """
+    成长型：20日绝对收益 × (1 + 加速度)。
+
+    加速度 = 5日收益 - 20日收益 / 4
+    当短期涨幅远超中期均值时，加速度为正，得分放大。
+    """
+    if srs.shape[0] < 21:
+        return np.nan
+    mom_20 = momentum_score(srs, 20)
+    mom_5 = momentum_score(srs, 5)
+    if pd.isna(mom_20) or pd.isna(mom_5):
+        return np.nan
+    acceleration = mom_5 - mom_20 / 4.0
+    return mom_20 * (1.0 + acceleration)
+
+
 def adaptive_momentum_score(
     srs: pd.Series,
     etf_type: str | None,
@@ -159,7 +176,7 @@ def adaptive_momentum_score(
     srs : pd.Series
         收盘价序列
     etf_type : str | None
-        ETF 类型，如 "行业股票", "红利", "商品", "宽基"
+        ETF 类型，如 "行业股票", "红利", "自由现金流", "成长", "商品", "宽基"
     benchmark_series : pd.Series | None
         行业股票残差动量所需的基准序列
     lookback : int
@@ -174,12 +191,14 @@ def adaptive_momentum_score(
         if benchmark_series is None:
             raise ValueError("行业股票动量需要提供 benchmark_series")
         return _residual_momentum_score(srs, benchmark_series, lookback=20)
-    elif etf_type == "红利":
+    elif etf_type in {"红利", "自由现金流"}:
         return _risk_adjusted_momentum_score(srs, lookback=40)
     elif etf_type == "商品":
         return _trend_momentum_score(srs, lookback=60)
     elif etf_type == "宽基":
         return _breakout_score(srs, lookback=252)
+    elif etf_type == "成长":
+        return _growth_momentum_score(srs)
     else:
         if etf_type:
             warnings.warn(

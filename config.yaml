@@ -8,7 +8,7 @@ data_source:
 
 # 回测全局配置
 backtest:
-  start_date: "20210101"
+  start_date: "20230101"
   cache_dir: "./data_cache"
 
 # 策略列表
@@ -70,15 +70,17 @@ strategies:
       rebalance_freq: 60
 
   - name: "动量轮动策略"
-    description: "A股风格轮动，自适应动量得分"
+    description: "A股风格轮动，自适应动量得分（含成长、自由现金流）"
     enabled: true
     mode: rotation
     pool:
       - { code: "512040", name: "价值100ETF富国", type: "红利" }
       - { code: "510300", name: "沪深300ETF", type: "宽基" }
       - { code: "515180", name: "红利ETF易方达", type: "红利" }
-      - { code: "588080", name: "科创50ETF易方达", type: "宽基" }
-      - { code: "159915", name: "创业板ETF", type: "宽基" }
+      # 自由现金流 ETF 与红利使用相同的 40日风险调整动量算法
+      # - { code: "159201", name: "自由现金流ETF", type: "自由现金流" }
+      - { code: "588080", name: "科创50ETF易方达", type: "成长" }
+      - { code: "159915", name: "创业板ETF", type: "成长" }
       - { code: "511260", name: "10年国债ETF国泰", type: "债券" }
       - { code: "513500", name: "标普500ETF博时", type: "宽基" }
       - { code: "518880", name: "黄金ETF", type: "商品" }

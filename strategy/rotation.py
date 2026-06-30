@@ -17,8 +17,10 @@ def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
     """Return the rolling window needed for an ETF type's adaptive scorer."""
     if etf_type == "行业股票":
         return 62
-    if etf_type == "红利":
-        return 41
+    if etf_type in {"红利", "自由现金流", "价值"}:
+        return 61
+    if etf_type == "成长":
+        return 21
     if etf_type == "商品":
         return 61
     if etf_type == "宽基":
@@ -31,6 +33,7 @@ def run(
     name_list: list[str],
     params: dict,
     name_types: dict[str, str | None] | None = None,
+    name_factors: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """
     轮动策略回测
@@ -51,6 +54,12 @@ def run(
         - lookback: 回望周期
         - scoring: "momentum" | "slope_r2"
         - top_n: 每天选前 N 个
+        - adaptive_scoring: 是否启用类型化自适应动量
+        - benchmark: 行业股票残差动量所需的基准名称
+    name_types : dict[str, str | None] | None
+        每个 name 对应的 ETF 类型，如 {"沪深300ETF": "宽基"}
+    name_factors : dict[str, float] | None
+        每个 name 对应的基本面因子调整系数，用于红利/自由现金流/价值型得分
 
     Returns
     -------
@@ -77,6 +86,7 @@ def run(
     if params.get("adaptive_scoring"):
         benchmark_name = params.get("benchmark")
         type_map = name_types or {}
+        factor_map = name_factors or {}
         benchmark_series = close_df[benchmark_name] if benchmark_name else None
         for name in name_list:
             etf_type = type_map.get(name)
@@ -87,10 +97,32 @@ def run(
                     etf_type=etf_type,
                     benchmark_series=benchmark_series,
                     lookback=lookback,
+                    factor_multiplier=factor_map.get(name, 1.0),
                 )
             )
-        signal_cols = [f"自适应得分_{v}" for v in name_list]
-        prefix = "自适应得分_"
+        raw_score_cols = [f"自适应得分_{v}" for v in name_list]
+
+        # 按 ETF 类型分组，组内做 Z-Score 标准化，使不同风格可在同一截面比较
+        style_groups: dict[str | None, list[str]] = {}
+        for name in name_list:
+            etf_type = type_map.get(name)
+            style_groups.setdefault(etf_type, []).append(name)
+
+        standardized = pd.DataFrame(index=df.index)
+        for etf_type, members in style_groups.items():
+            member_cols = [f"自适应得分_{n}" for n in members]
+            group_scores = df[member_cols]
+            mean = group_scores.mean(axis=1)
+            std = group_scores.std(axis=1, ddof=0)
+            for name in members:
+                col = f"自适应得分_{name}"
+                zscore = (group_scores[col] - mean) / std
+                # 单成员组或标准差为 0 时退回原始得分，避免整组被抹除
+                standardized[f"标准化得分_{name}"] = zscore.where(std > 0, group_scores[col])
+
+        signal_cols = [f"标准化得分_{v}" for v in name_list]
+        prefix = "标准化得分_"
+        df = pd.concat([df, standardized], axis=1)
     elif scoring == "slope_r2":
         for name in name_list:
             df[f"得分_{name}"] = df[name].rolling(lookback).apply(

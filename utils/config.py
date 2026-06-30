@@ -24,6 +24,7 @@ class PoolItem:
     code: str
     name: str
     weight: float = 0.0  # 百分数，如 25 表示 25%
+    type: str | None = None
 
 
 @dataclass
@@ -63,8 +64,25 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                     f'策略 "{s["name"]}" 权重之和为 {total}%，必须等于 100%'
                 )
 
-        # 校验需要 safe_haven 的风控参数
+        # 校验 adaptive_scoring 的 benchmark 参数
         params = s.get("params", {})
+        if params.get("adaptive_scoring"):
+            has_sector = any(p.type == "行业股票" for p in pool)
+            if has_sector:
+                benchmark = params.get("benchmark")
+                if not benchmark:
+                    raise ValueError(
+                        f'策略 "{s["name"]}" 开启 adaptive_scoring 且包含行业股票时，'
+                        f'必须在 params 中配置 benchmark'
+                    )
+                pool_names = {p.name for p in pool}
+                if benchmark not in pool_names:
+                    raise ValueError(
+                        f'策略 "{s["name"]}" 的 benchmark "{benchmark}" 不在 pool 中，'
+                        f'可用的标的: {sorted(pool_names)}'
+                    )
+
+        # 校验需要 safe_haven 的风控参数
         needs_safe_haven = (
             params.get("absolute_momentum_filter", False)
             or params.get("target_volatility") is not None

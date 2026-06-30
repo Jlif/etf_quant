@@ -285,8 +285,16 @@ def run_strategy(
         result = rotation.run(data, name_list, strategy.params, name_types=name_types)
         # 以第一个标的为基准（净值序列，从1开始）
         benchmark_col = f"{name_list[0]}净值"
+        benchmark_name = name_list[0]
         for name in name_list:
-            result[f"{name}净值"] = result[name] / result[name].iloc[0]
+            price = result[name].copy()
+            # 若基准 ETF 数据起始晚于策略实际起始日，用首个有效价格回填，
+            # 避免 quantstats 因基准缺数而把报告截断到更晚的日期。
+            if name == benchmark_name:
+                first_valid = price.first_valid_index()
+                if first_valid is not None and first_valid != price.index[0]:
+                    price.loc[:first_valid] = price.loc[first_valid]
+            result[f"{name}净值"] = price / price.iloc[0]
     elif strategy.mode == "weighted":
         weights = {p.name: p.weight for p in strategy.pool}
         result = weighted.run(data, name_list, weights, strategy.params)
@@ -370,14 +378,18 @@ def _build_rebalance_df(result: pd.DataFrame) -> pd.DataFrame | None:
     ]
 
     nav_col = "轮动策略净值"
+    start_nav = result[nav_col].iloc[0] if not result[nav_col].empty else 1.0
     changes["换仓前净值"] = result[nav_col].shift(1).loc[changes.index]
     changes["换仓后净值"] = result[nav_col].loc[changes.index]
     changes["当天涨跌幅"] = (
         changes["换仓后净值"] / changes["换仓前净值"] - 1.0
     )
     changes["当天涨跌幅"] = changes["当天涨跌幅"].apply(lambda x: f"{x:+.2%}")
+    changes["累计收益"] = (
+        (changes["换仓后净值"] / start_nav - 1.0).apply(lambda x: f"{x:+.2%}")
+    )
 
-    rebalance_df = changes[["持仓", "调出", "调入", "换仓前净值", "换仓后净值", "当天涨跌幅"]]
+    rebalance_df = changes[["持仓", "调出", "调入", "换仓前净值", "换仓后净值", "当天涨跌幅", "累计收益"]]
     rebalance_df.index.name = "日期"
     return rebalance_df
 

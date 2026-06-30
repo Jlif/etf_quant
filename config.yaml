@@ -8,7 +8,7 @@ data_source:
 
 # 回测全局配置
 backtest:
-  start_date: "20230101"
+  start_date: "20200101"
   cache_dir: "./data_cache"
 
 # 策略列表

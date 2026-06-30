@@ -25,6 +25,7 @@ class PoolItem:
     name: str
     weight: float = 0.0  # 百分数，如 25 表示 25%
     type: str | None = None
+    factor_multiplier: float = 1.0  # 基本面因子调整系数，用于价值/红利型得分
 
 
 @dataclass

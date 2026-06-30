@@ -63,8 +63,19 @@ def run(
     # 2. 计算得分（基于收盘价）
     if params.get("adaptive_scoring"):
         benchmark_name = params.get("benchmark")
-        benchmark_series = close_df[benchmark_name] if benchmark_name else None
         type_map = name_types or {}
+        has_sector = any(t == "行业股票" for t in type_map.values())
+        if has_sector:
+            if not benchmark_name:
+                raise ValueError(
+                    "开启 adaptive_scoring 且 pool 包含行业股票时，"
+                    "params['benchmark'] 必须提供"
+                )
+            if benchmark_name not in name_list:
+                raise ValueError(
+                    f"params['benchmark']={benchmark_name!r} 不在 name_list 中"
+                )
+        benchmark_series = close_df[benchmark_name] if benchmark_name else None
         for name in name_list:
             etf_type = type_map.get(name)
             df[f"自适应得分_{name}"] = df[name].rolling(max(lookback, 252)).apply(

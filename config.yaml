@@ -70,18 +70,22 @@ strategies:
       rebalance_freq: 60
 
   - name: "动量轮动策略"
-    description: "A股风格轮动，自适应动量得分"
+    description: "风格自适应轮动：价值/红利用风险调整动量，成长用加速度动量，组内Z-Score后选最强"
     enabled: true
     mode: rotation
     pool:
-      - { code: "512040", name: "价值100ETF富国", type: "红利" }
+      # 价值/红利型：60日收益/波动率 × factor_multiplier
+      # factor_multiplier >1 表示基本面更优（如股息率高位、PE低位），<1 表示偏弱
+      - { code: "512040", name: "价值100ETF富国", type: "价值", factor_multiplier: 1.0 }
+      - { code: "515180", name: "红利ETF易方达", type: "红利", factor_multiplier: 1.0 }
+      # 成长型：20日收益 × (1 + 加速度)
+      - { code: "588080", name: "科创50ETF易方达", type: "成长" }
+      - { code: "159915", name: "创业板ETF", type: "成长" }
+      # 宽基/商品/债券：沿用既有自适应算法（债券会退化为默认动量并警告）
       - { code: "510300", name: "沪深300ETF", type: "宽基" }
-      - { code: "515180", name: "红利ETF易方达", type: "红利" }
-      - { code: "588080", name: "科创50ETF易方达", type: "宽基" }
-      - { code: "159915", name: "创业板ETF", type: "宽基" }
-      - { code: "511260", name: "10年国债ETF国泰", type: "债券" }
       - { code: "513500", name: "标普500ETF博时", type: "宽基" }
       - { code: "518880", name: "黄金ETF", type: "商品" }
+      - { code: "511260", name: "10年国债ETF国泰", type: "债券" }
     params:
       lookback: 22
       scoring: momentum

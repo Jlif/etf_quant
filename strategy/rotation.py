@@ -17,7 +17,7 @@ def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
     """Return the rolling window needed for an ETF type's adaptive scorer."""
     if etf_type == "行业股票":
         return 62
-    if etf_type in {"红利", "自由现金流"}:
+    if etf_type in {"红利", "自由现金流", "价值"}:
         return 41
     if etf_type == "成长":
         return 21
@@ -117,6 +117,16 @@ def run(
         df = df.dropna(subset=signal_cols, how="all")
     else:
         df = df.dropna()
+
+    if df.empty:
+        raise ValueError(
+            "计算得分后没有剩余有效数据。可能原因：\n"
+            "1. 数据长度不足（例如 宽基 需要 252 个交易日）；\n"
+            "2. 所有 ETF 在计算窗口内价格无变化（波动率为 0）；\n"
+            "3. 配置了无法识别的 type，导致回退为默认 momentum 但数据仍不足。\n"
+            f"当前时间范围: {data['close'].index[0].date()} ~ {data['close'].index[-1].date()}, "
+            f"共 {len(data['close'])} 条"
+        )
 
     # 3. 生成每日权重：top_n 等权，其余为 0
     rank_df = df[signal_cols].rank(axis=1, ascending=False, method="first", na_option="keep")
@@ -244,6 +254,13 @@ def run(
         )
         df.loc[is_hold, f"贡献_日收益_{name}"] = (
             df.loc[is_hold, f"日收益率_持有_{name}"] * df.loc[is_hold, weight_col]
+        )
+
+    if df.empty:
+        raise ValueError(
+            "持仓权重前移后没有剩余有效数据。可能原因：\n"
+            "1. 所有 ETF 在首个交易日即无有效得分；\n"
+            "2. 风控过滤器（如绝对动量过滤）清空了所有持仓。"
         )
 
     df.loc[df.index[0], "轮动策略日收益率"] = 0.0

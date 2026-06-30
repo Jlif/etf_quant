@@ -191,7 +191,7 @@ def adaptive_momentum_score(
         if benchmark_series is None:
             raise ValueError("行业股票动量需要提供 benchmark_series")
         return _residual_momentum_score(srs, benchmark_series, lookback=20)
-    elif etf_type in {"红利", "自由现金流"}:
+    elif etf_type in {"红利", "自由现金流", "价值"}:
         return _risk_adjusted_momentum_score(srs, lookback=40)
     elif etf_type == "商品":
         return _trend_momentum_score(srs, lookback=60)

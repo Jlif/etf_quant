@@ -25,13 +25,13 @@ def test_sector_residual_momentum_positive_when_outperforming():
 
 
 def test_dividend_risk_adjusted_score():
-    prices = _price_series(np.linspace(100, 110, 41))
+    prices = _price_series(np.linspace(100, 110, 40))
     score = adaptive_momentum_score(prices, etf_type="红利", lookback=40)
     assert score > 0
 
 
 def test_commodity_trend_score():
-    prices = _price_series(np.linspace(100, 120, 61))
+    prices = _price_series(np.linspace(100, 120, 60))
     score = adaptive_momentum_score(prices, etf_type="商品", lookback=60)
     assert score > 0
 

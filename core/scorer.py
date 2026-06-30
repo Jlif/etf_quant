@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
@@ -61,7 +63,10 @@ def _regression_slope(srs: pd.Series, lookback: int) -> float:
     if srs.shape[0] < lookback:
         return np.nan
     x = np.arange(lookback).reshape(-1, 1)
-    y = srs.iloc[-lookback:].values / srs.iloc[-lookback]
+    start_price = srs.iloc[-lookback]
+    if start_price == 0 or pd.isna(start_price):
+        return np.nan
+    y = srs.iloc[-lookback:].values / start_price
     lr = LinearRegression().fit(x, y)
     return lr.coef_[0]
 
@@ -109,9 +114,9 @@ def _risk_adjusted_momentum_score(srs: pd.Series, lookback: int) -> float:
     """
     红利 / 商品：区间收益 / 区间年化波动率。
     """
-    if srs.shape[0] < lookback + 1:
+    if srs.shape[0] < lookback:
         return np.nan
-    total_return = srs.iloc[-1] / srs.iloc[-(lookback + 1)] - 1.0
+    total_return = srs.iloc[-1] / srs.iloc[-lookback] - 1.0
     daily_returns = srs.pct_change().dropna().iloc[-lookback:]
     if len(daily_returns) < 2:
         return np.nan
@@ -177,5 +182,8 @@ def adaptive_momentum_score(
         return _breakout_score(srs, lookback=252)
     else:
         if etf_type:
-            print(f"[自适应动量] 未识别类型 \"{etf_type}\"，退化为默认 momentum 得分")
+            warnings.warn(
+                f'[自适应动量] 未识别类型 "{etf_type}"，退化为默认 momentum 得分',
+                stacklevel=2,
+            )
         return momentum_score(srs, lookback)

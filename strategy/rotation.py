@@ -16,11 +16,11 @@ from .risk import absolute_momentum_filter, trailing_stop_filter, volatility_tar
 def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
     """Return the rolling window needed for an ETF type's adaptive scorer."""
     if etf_type == "行业股票":
-        return max(20, 60) + 1
+        return 62
     if etf_type == "红利":
-        return 40
+        return 41
     if etf_type == "商品":
-        return 60
+        return 61
     if etf_type == "宽基":
         return 252
     return default_lookback + 1

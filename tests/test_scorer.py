@@ -18,20 +18,20 @@ def test_unknown_type_falls_back_to_momentum():
 
 def test_sector_residual_momentum_positive_when_outperforming():
     # ETF 持续上涨，benchmark 横盘
-    etf = _price_series(np.linspace(100, 120, 80))
-    benchmark = _price_series(np.linspace(100, 102, 80))
+    etf = _price_series(np.linspace(100, 120, 62))
+    benchmark = _price_series(np.linspace(100, 102, 62))
     score = adaptive_momentum_score(etf, etf_type="行业股票", benchmark_series=benchmark, lookback=20)
     assert score > 0
 
 
 def test_dividend_risk_adjusted_score():
-    prices = _price_series(np.linspace(100, 110, 40))
+    prices = _price_series(np.linspace(100, 110, 41))
     score = adaptive_momentum_score(prices, etf_type="红利", lookback=40)
     assert score > 0
 
 
 def test_commodity_trend_score():
-    prices = _price_series(np.linspace(100, 120, 60))
+    prices = _price_series(np.linspace(100, 120, 61))
     score = adaptive_momentum_score(prices, etf_type="商品", lookback=60)
     assert score > 0
 

@@ -50,7 +50,7 @@ def test_adaptive_scoring_without_sector_allows_missing_benchmark():
 
 def test_adaptive_scoring_non_broad_index_does_not_require_252_days():
     """非宽基组合不应被强制要求 252 天预热期。"""
-    n = 80  # 小于 252，但大于红利所需的 40
+    n = 82  # 小于 252，但大于商品所需的 61
     data = _make_data(n=n, names=("红利ETF", "商品ETF"))
     # 给红利 ETF 一些涨幅，避免波动率为 0 导致得分 NaN
     data["close"]["红利ETF"] = np.linspace(100, 120, n)

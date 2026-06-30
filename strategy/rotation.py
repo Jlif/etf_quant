@@ -226,6 +226,14 @@ def run(
     for name in name_list:
         df[f"权重_{name}"] = df[f"权重_{name}"].shift(1)
 
+    # 信号列的 NaN 仅影响当日排名，不影响已确定的 T+1 持仓及收益计算，
+    # 不同 ETF 的预热窗口不同（如宽基 252 日、跨境 ETF 数据缺失）会导致
+    # 信号列存在大量 NaN；若直接 dropna 会误删大量有效交易日，使净值曲线
+    # 出现虚假的水平段。因此先移除信号列，再按权重/收益列清理。
+    score_prefixes = ("自适应得分_", "得分_", "质量_", "涨幅_")
+    score_cols = [c for c in df.columns if c.startswith(score_prefixes)]
+    df = df.drop(columns=score_cols)
+
     df = df.dropna()
 
     # 5. 计算策略日收益率

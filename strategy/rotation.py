@@ -13,6 +13,19 @@ from core.scorer import (
 from .risk import absolute_momentum_filter, trailing_stop_filter, volatility_target_filter
 
 
+def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
+    """Return the rolling window needed for an ETF type's adaptive scorer."""
+    if etf_type == "行业股票":
+        return max(20, 60) + 1
+    if etf_type == "红利":
+        return 40
+    if etf_type == "商品":
+        return 60
+    if etf_type == "宽基":
+        return 252
+    return default_lookback + 1
+
+
 def run(
     data: dict[str, pd.DataFrame],
     name_list: list[str],
@@ -67,7 +80,8 @@ def run(
         benchmark_series = close_df[benchmark_name] if benchmark_name else None
         for name in name_list:
             etf_type = type_map.get(name)
-            df[f"自适应得分_{name}"] = df[name].rolling(max(lookback, 252)).apply(
+            window = _adaptive_window(etf_type, lookback)
+            df[f"自适应得分_{name}"] = df[name].rolling(window).apply(
                 lambda x: adaptive_momentum_score(
                     x,
                     etf_type=etf_type,
@@ -100,7 +114,7 @@ def run(
     df = df.dropna()
 
     # 3. 生成每日权重：top_n 等权，其余为 0
-    rank_df = df[signal_cols].rank(axis=1, ascending=False, method="first")
+    rank_df = df[signal_cols].rank(axis=1, ascending=False, method="first", na_option="keep")
     for name in name_list:
         col = f"{prefix}{name}"
         df[f"权重_{name}"] = (rank_df[col] <= top_n).astype(float) / top_n

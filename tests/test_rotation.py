@@ -70,6 +70,39 @@ def test_adaptive_scoring_non_broad_index_does_not_require_252_days():
     assert result["轮动策略净值"].iloc[-1] > 0
 
 
+def test_adaptive_scoring_nan_score_gets_zero_weight():
+    """一只 ETF 得分为 NaN 时，另一只 ETF 仍应被选入并获得权重。"""
+    n = 100
+    idx = pd.date_range("2023-01-01", periods=n)
+    # 红利 ETF 有正常趋势；商品 ETF 前期价格不变 -> 波动率为 0 -> 得分为 NaN
+    close = pd.DataFrame(
+        {
+            "红利ETF": np.linspace(100, 120, n),
+            "商品ETF": np.full(n, 100.0),
+        },
+        index=idx,
+    )
+    # 商品 ETF 后期出现小幅波动，使其得分恢复有效
+    close.loc[idx[70:], "商品ETF"] = np.linspace(100.0, 100.5, len(idx[70:]))
+    open_ = close.copy()
+    high = close * 1.01
+    low = close * 0.99
+    data = {"close": close, "open": open_, "high": high, "low": low}
+    params = {
+        "lookback": 20,
+        "scoring": "momentum",
+        "adaptive_scoring": True,
+        "top_n": 1,
+    }
+    name_types = {"红利ETF": "红利", "商品ETF": "商品"}
+    result = run(data, list(data["close"].columns), params, name_types=name_types)
+    assert len(result) > 0
+    # 商品 ETF 前期得分为 NaN，对应权重应为 0
+    assert (result["权重_商品ETF"].iloc[:10] == 0).all()
+    # 红利 ETF 应获得权重
+    assert (result["权重_红利ETF"] > 0).any()
+
+
 def test_adaptive_scoring_unknown_type_uses_lookback():
     """未知/缺失类型应使用默认 lookback，而不是 252。"""
     n = 50  # 小于 252，但大于默认 lookback 20

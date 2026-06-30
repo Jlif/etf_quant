@@ -111,7 +111,10 @@ def run(
         signal_cols = [f"涨幅_{v}" for v in name_list]
         prefix = "涨幅_"
 
-    df = df.dropna()
+    if params.get("adaptive_scoring"):
+        df = df.dropna(subset=signal_cols, how="all")
+    else:
+        df = df.dropna()
 
     # 3. 生成每日权重：top_n 等权，其余为 0
     rank_df = df[signal_cols].rank(axis=1, ascending=False, method="first", na_option="keep")

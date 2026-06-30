@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import numpy as np
 
 from core.scorer import (
     adaptive_momentum_score,
@@ -133,6 +134,29 @@ def run(
     for name in name_list:
         col = f"{prefix}{name}"
         df[f"权重_{name}"] = (rank_df[col] <= top_n).astype(float) / top_n
+
+    # 3.1 换仓阈值 Buffer（仅支持 top_n=1）
+    # 实盘时避免 0.152 vs 0.151 这种微小差距就触发换仓。只有当新第一名的得分
+    # 超过当前持仓得分的 (1 + buffer) 倍时才允许换仓，从而压低换手率。
+    rebalance_buffer = params.get("rebalance_buffer", 0.0)
+    if rebalance_buffer > 0 and top_n == 1:
+        weight_cols = [f"权重_{n}" for n in name_list]
+        for i in range(1, len(df)):
+            curr_date = df.index[i]
+            prev_date = df.index[i - 1]
+            prev_holding = df.loc[prev_date, weight_cols].idxmax().replace("权重_", "")
+            curr_top_score_col = df.loc[curr_date, signal_cols].idxmax()
+            curr_top = curr_top_score_col.replace(prefix, "")
+
+            if prev_holding != curr_top:
+                prev_score = df.loc[curr_date, f"{prefix}{prev_holding}"]
+                curr_score = df.loc[curr_date, curr_top_score_col]
+                if pd.isna(prev_score) or pd.isna(curr_score):
+                    continue
+                if curr_score <= prev_score * (1.0 + rebalance_buffer):
+                    # 新第一名优势不足，维持原持仓
+                    for name in name_list:
+                        df.loc[curr_date, f"权重_{name}"] = 1.0 if name == prev_holding else 0.0
 
     # 初始化风控原因列，用于记录每个过滤器对持仓的调整
     df["风控原因"] = ""
@@ -272,6 +296,20 @@ def run(
         )
 
     df.loc[df.index[0], "轮动策略日收益率"] = 0.0
+
+    # 5.1 交易成本（滑点 + 手续费）
+    # transaction_cost 为单边成本，例如 0.0015 表示千分之 1.5。
+    # 换手率 = sum(|今日权重 - 昨日权重|) / 2，双边成本 = 换手率 * 2 * 单边成本。
+    transaction_cost = params.get("transaction_cost", 0.0)
+    if transaction_cost > 0:
+        weight_cols = [f"权重_{n}" for n in name_list]
+        turnover = np.zeros(len(df))
+        for i in range(1, len(df)):
+            turnover[i] = np.sum(np.abs(df.iloc[i][weight_cols].values - df.iloc[i - 1][weight_cols].values)) / 2.0
+        df["换手率"] = turnover
+        df["交易成本"] = df["换手率"] * transaction_cost * 2.0
+        df["轮动策略日收益率"] -= df["交易成本"]
+
     df["轮动策略净值"] = (1.0 + df["轮动策略日收益率"]).cumprod()
 
     # 记录每日主持仓信号（权重最大的那个）

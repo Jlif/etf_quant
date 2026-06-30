@@ -131,3 +131,64 @@ def test_adaptive_scoring_unknown_type_uses_lookback():
     assert len(result) > 0
     assert "轮动策略净值" in result.columns
     assert result["轮动策略净值"].iloc[-1] > 0
+
+
+def test_adaptive_scoring_group_zscore_selects_stronger_in_style():
+    """同风格组内 Z-Score 后，风险调整得分更高的 ETF 应被选中。"""
+    n = 100
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {
+            "价值A": np.linspace(100, 150, n),   # 强趋势，正得分
+            "价值B": np.linspace(100, 95, n),    # 弱下跌，负得分
+        },
+        index=idx,
+    )
+    open_ = close.copy()
+    high = close * 1.01
+    low = close * 0.99
+    data = {"close": close, "open": open_, "high": high, "low": low}
+    params = {
+        "lookback": 20,
+        "scoring": "momentum",
+        "adaptive_scoring": True,
+        "top_n": 1,
+    }
+    name_types = {"价值A": "价值", "价值B": "价值"}
+    result = run(data, list(close.columns), params, name_types=name_types)
+    # 价值A 得分更高，应有更多持有天数
+    assert (result["权重_价值A"] > 0).sum() >= (result["权重_价值B"] > 0).sum()
+
+
+def test_adaptive_scoring_factor_multiplier_boosts_value_etf():
+    """相同价格走势下，factor_multiplier 更高的价值型 ETF 应优先被选中。"""
+    n = 100
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {
+            "价值A": np.linspace(100, 120, n),
+            "价值B": np.linspace(100, 120, n),
+        },
+        index=idx,
+    )
+    open_ = close.copy()
+    high = close * 1.01
+    low = close * 0.99
+    data = {"close": close, "open": open_, "high": high, "low": low}
+    params = {
+        "lookback": 20,
+        "scoring": "momentum",
+        "adaptive_scoring": True,
+        "top_n": 1,
+    }
+    name_types = {"价值A": "价值", "价值B": "价值"}
+    name_factors = {"价值A": 1.0, "价值B": 1.5}
+    result = run(
+        data,
+        list(close.columns),
+        params,
+        name_types=name_types,
+        name_factors=name_factors,
+    )
+    # 价值B 被基本面因子放大，应有更多持有天数
+    assert (result["权重_价值B"] > 0).sum() >= (result["权重_价值A"] > 0).sum()

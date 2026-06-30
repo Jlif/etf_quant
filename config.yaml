@@ -74,7 +74,7 @@ strategies:
     enabled: true
     mode: rotation
     pool:
-      - { code: "512040", name: "价值100ETF富国", type: "红利" }
+      - { code: "512040", name: "价值100ETF富国", type: "价值" }
       - { code: "515180", name: "红利ETF易方达", type: "红利" }
       # - { code: "159201", name: "自由现金流ETF华夏", type: "自由现金流" }
       - { code: "588080", name: "科创50ETF易方达", type: "成长" }

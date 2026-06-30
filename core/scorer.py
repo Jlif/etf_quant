@@ -135,31 +135,14 @@ def _trend_momentum_score(srs: pd.Series, lookback: int) -> float:
 
 def _breakout_score(srs: pd.Series, lookback: int = 252) -> float:
     """
-    宽基：当前价 / 过去 lookback 日最高价。
+    宽基：突破252日新高则 1.0，否则 0.0。
     """
     if srs.shape[0] < lookback:
         return np.nan
     highest = srs.iloc[-lookback:].max()
     if highest == 0 or pd.isna(highest):
         return np.nan
-    return srs.iloc[-1] / highest
-
-
-def _growth_momentum_score(srs: pd.Series) -> float:
-    """
-    成长型：20日绝对收益 × (1 + 加速度)。
-
-    加速度 = 5日收益 - 20日收益 / 4
-    当短期涨幅远超中期均值时，加速度为正，得分放大。
-    """
-    if srs.shape[0] < 21:
-        return np.nan
-    mom_20 = momentum_score(srs, 20)
-    mom_5 = momentum_score(srs, 5)
-    if pd.isna(mom_20) or pd.isna(mom_5):
-        return np.nan
-    acceleration = mom_5 - mom_20 / 4.0
-    return mom_20 * (1.0 + acceleration)
+    return 1.0 if srs.iloc[-1] >= highest else 0.0
 
 
 def adaptive_momentum_score(
@@ -167,7 +150,6 @@ def adaptive_momentum_score(
     etf_type: str | None,
     benchmark_series: pd.Series | None = None,
     lookback: int = 20,
-    factor_multiplier: float = 1.0,
 ) -> float:
     """
     根据 ETF 类型计算自适应动量得分。
@@ -177,13 +159,11 @@ def adaptive_momentum_score(
     srs : pd.Series
         收盘价序列
     etf_type : str | None
-        ETF 类型，如 "行业股票", "红利", "自由现金流", "价值", "成长", "商品", "宽基"
+        ETF 类型，如 "行业股票", "红利", "商品", "宽基"
     benchmark_series : pd.Series | None
         行业股票残差动量所需的基准序列
     lookback : int
         默认回望周期，不同类型内部可能使用固定周期
-    factor_multiplier : float
-        基本面因子调整系数，用于红利/自由现金流/价值型得分
 
     Returns
     -------
@@ -194,10 +174,8 @@ def adaptive_momentum_score(
         if benchmark_series is None:
             raise ValueError("行业股票动量需要提供 benchmark_series")
         return _residual_momentum_score(srs, benchmark_series, lookback=20)
-    elif etf_type in {"红利", "自由现金流", "价值"}:
-        return _risk_adjusted_momentum_score(srs, lookback=60) * factor_multiplier
-    elif etf_type == "成长":
-        return _growth_momentum_score(srs)
+    elif etf_type == "红利":
+        return _risk_adjusted_momentum_score(srs, lookback=40)
     elif etf_type == "商品":
         return _trend_momentum_score(srs, lookback=60)
     elif etf_type == "宽基":

@@ -262,11 +262,7 @@ def run_strategy(
 
     if strategy.mode == "rotation":
         name_types = {p.name: p.type for p in strategy.pool}
-        name_factors = {p.name: p.factor_multiplier for p in strategy.pool}
-        result = rotation.run(
-            data, name_list, strategy.params,
-            name_types=name_types, name_factors=name_factors,
-        )
+        result = rotation.run(data, name_list, strategy.params, name_types=name_types)
         # 以第一个标的为基准（净值序列，从1开始）
         benchmark_col = f"{name_list[0]}净值"
         for name in name_list:

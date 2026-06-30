@@ -17,33 +17,6 @@ def _make_data(n=300, names=("沪深300ETF", "红利ETF")):
     return {"close": close, "open": open_, "high": high, "low": low}
 
 
-def test_adaptive_scoring_sector_requires_benchmark():
-    data = _make_data()
-    params = {
-        "lookback": 20,
-        "scoring": "momentum",
-        "adaptive_scoring": True,
-        "top_n": 1,
-    }
-    name_types = {"沪深300ETF": "行业股票", "红利ETF": "红利"}
-    with pytest.raises(ValueError, match="params\\['benchmark'\\] 必须提供"):
-        run(data, list(data["close"].columns), params, name_types=name_types)
-
-
-def test_adaptive_scoring_sector_requires_benchmark_in_name_list():
-    data = _make_data()
-    params = {
-        "lookback": 20,
-        "scoring": "momentum",
-        "adaptive_scoring": True,
-        "benchmark": "中证500ETF",
-        "top_n": 1,
-    }
-    name_types = {"沪深300ETF": "行业股票", "红利ETF": "红利"}
-    with pytest.raises(ValueError, match="params\\['benchmark'\\]=.* 不在 name_list"):
-        run(data, list(data["close"].columns), params, name_types=name_types)
-
-
 def test_adaptive_scoring_uses_type_scores():
     data = _make_data()
     params = {

@@ -261,7 +261,8 @@ def run_strategy(
     name_list = data["close"].columns.tolist()
 
     if strategy.mode == "rotation":
-        result = rotation.run(data, name_list, strategy.params)
+        name_types = {p.name: p.type for p in strategy.pool}
+        result = rotation.run(data, name_list, strategy.params, name_types=name_types)
         # 以第一个标的为基准（净值序列，从1开始）
         benchmark_col = f"{name_list[0]}净值"
         for name in name_list:

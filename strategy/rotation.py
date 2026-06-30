@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from core.scorer import momentum_quality_score, momentum_score, slope_r2_score
+from core.scorer import (
+    adaptive_momentum_score,
+    momentum_quality_score,
+    momentum_score,
+    slope_r2_score,
+)
 from .risk import absolute_momentum_filter, trailing_stop_filter, volatility_target_filter
 
 
@@ -12,6 +17,7 @@ def run(
     data: dict[str, pd.DataFrame],
     name_list: list[str],
     params: dict,
+    name_types: dict[str, str | None] | None = None,
 ) -> pd.DataFrame:
     """
     轮动策略回测
@@ -55,7 +61,23 @@ def run(
         df[f"日收益率_持有_{name}"] = close_df[name] / close_df[name].shift(1) - 1.0
 
     # 2. 计算得分（基于收盘价）
-    if scoring == "slope_r2":
+    if params.get("adaptive_scoring"):
+        benchmark_name = params.get("benchmark")
+        benchmark_series = close_df[benchmark_name] if benchmark_name else None
+        type_map = name_types or {}
+        for name in name_list:
+            etf_type = type_map.get(name)
+            df[f"自适应得分_{name}"] = df[name].rolling(max(lookback, 252)).apply(
+                lambda x: adaptive_momentum_score(
+                    x,
+                    etf_type=etf_type,
+                    benchmark_series=benchmark_series,
+                    lookback=lookback,
+                )
+            )
+        signal_cols = [f"自适应得分_{v}" for v in name_list]
+        prefix = "自适应得分_"
+    elif scoring == "slope_r2":
         for name in name_list:
             df[f"得分_{name}"] = df[name].rolling(lookback).apply(
                 lambda x: slope_r2_score(x, lookback)

@@ -25,8 +25,31 @@ def test_sector_residual_momentum_positive_when_outperforming():
 
 
 def test_dividend_risk_adjusted_score():
-    prices = _price_series(np.linspace(100, 110, 41))
-    score = adaptive_momentum_score(prices, etf_type="红利", lookback=40)
+    prices = _price_series(np.linspace(100, 110, 61))
+    score = adaptive_momentum_score(prices, etf_type="红利", lookback=60)
+    assert score > 0
+
+
+def test_value_types_use_sixty_day_risk_adjusted():
+    prices = _price_series(np.linspace(100, 110, 61))
+    for etf_type in ("红利", "自由现金流", "价值"):
+        score = adaptive_momentum_score(prices, etf_type=etf_type, lookback=60)
+        assert score > 0, etf_type
+
+
+def test_value_factor_multiplier_scales_score():
+    prices = _price_series(np.linspace(100, 110, 61))
+    base = adaptive_momentum_score(prices, etf_type="价值", lookback=60)
+    boosted = adaptive_momentum_score(
+        prices, etf_type="价值", lookback=60, factor_multiplier=1.5
+    )
+    assert boosted == pytest.approx(base * 1.5)
+
+
+def test_growth_momentum_score():
+    # 近5日加速上涨的价格序列
+    prices = _price_series(np.concatenate([np.linspace(100, 105, 16), np.linspace(105, 120, 5)]))
+    score = adaptive_momentum_score(prices, etf_type="成长", lookback=20)
     assert score > 0
 
 

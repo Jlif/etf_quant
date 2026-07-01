@@ -103,6 +103,25 @@ def test_adaptive_scoring_nan_score_gets_zero_weight():
     assert (result["权重_红利ETF"] > 0).any()
 
 
+def test_dynamic_pool_all_unavailable_is_cash():
+    """dynamic_pool=true 且所有 ETF 都不可用时，策略空仓，净值不变。"""
+    n = 70
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {
+            "晚上市ETF": np.where(np.arange(n) < 45, np.nan, np.linspace(100, 110, n)),
+        },
+        index=idx,
+    )
+    open_ = close.copy()
+    data = {"close": close, "open": open_, "high": close * 1.01, "low": close * 0.99}
+    params = {"lookback": 20, "scoring": "momentum", "top_n": 1, "dynamic_pool": True}
+    result = run(data, list(close.columns), params)
+    # 所有行权重都应为 0，净值保持 1
+    assert (result["权重_晚上市ETF"] == 0).all()
+    assert (result["轮动策略净值"] == 1.0).all()
+
+
 def test_dynamic_pool_fills_with_safe_haven():
     """dynamic_pool=true 且可选 ETF 不足 top_n 时，剩余仓位给 safe_haven。"""
     n = 100

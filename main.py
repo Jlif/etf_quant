@@ -203,35 +203,35 @@ def fetch_pool_data(
     data_high = pd.DataFrame(all_high)
     data_low = pd.DataFrame(all_low)
 
-    # 策略实际起始日 = max(配置起始日, 所有 ETF 中最晚的数据起始日, 所有 ETF 都能产生有效得分的最晚日期)
-    # 不同 type 的 ETF 需要不同长度的历史数据才能计算出第一个有效得分，
-    # 因此 effective_start 应取各 ETF (actual_start + 所需窗口) 的最大值。
-    name_types = {p.name: p.type for p in strategy.pool}
-    lookback = strategy.params.get("lookback", 20)
-    required_starts = {}
-    for name in data_close.columns:
-        window = rotation._adaptive_window(name_types.get(name), lookback)
-        etf_series = all_close[name]
-        if len(etf_series) >= window:
-            required_starts[name] = etf_series.index[window - 1]
-        else:
-            required_starts[name] = etf_series.index[-1]
-    latest_required_start = max(required_starts.values())
-
     latest_etf_start = max(actual_starts.values())
-    effective_start = max(target_start_dt, latest_etf_start, latest_required_start)
 
-    if latest_etf_start > target_start_dt:
-        print(f"  [注意] 配置起始日 {target_start_dt.date()} 早于部分 ETF 数据起始日")
-        for name, st in actual_starts.items():
-            if st > target_start_dt:
-                print(f"         {name} 实际起始: {st.date()}")
+    # 策略实际起始日 = max(配置起始日, 所有 ETF 中最晚的数据起始日)
+    # dynamic_pool 模式下，允许 ETF 分批就绪，不再用预热窗口截断起始日。
+    dynamic_pool = strategy.params.get("dynamic_pool", False)
+    if dynamic_pool:
+        effective_start = max(target_start_dt, latest_etf_start)
+    else:
+        # 非 dynamic_pool 模式保持原行为：等所有 ETF 都能产生有效得分再开始
+        # 不同 type 的 ETF 需要不同长度的历史数据才能计算出第一个有效得分，
+        # 因此 effective_start 应取各 ETF (actual_start + 所需窗口) 的最大值。
+        name_types = {p.name: p.type for p in strategy.pool}
+        lookback = strategy.params.get("lookback", 20)
+        required_starts = {}
+        for name in data_close.columns:
+            window = rotation._adaptive_window(name_types.get(name), lookback)
+            etf_series = all_close[name]
+            if len(etf_series) >= window:
+                required_starts[name] = etf_series.index[window - 1]
+            else:
+                required_starts[name] = etf_series.index[-1]
+        latest_required_start = max(required_starts.values())
+        effective_start = max(target_start_dt, latest_etf_start, latest_required_start)
 
-    if latest_required_start > max(target_start_dt, latest_etf_start):
-        print(
-            f"  [注意] 部分 ETF 需要更长的预热期才能产生有效得分，"
-            f"策略实际起始日调整为 {latest_required_start.date()}"
-        )
+        if latest_required_start > max(target_start_dt, latest_etf_start):
+            print(
+                f"  [注意] 部分 ETF 需要更长的预热期才能产生有效得分，"
+                f"策略实际起始日调整为 {latest_required_start.date()}"
+            )
 
     if effective_start != data_close.index[0]:
         print(f"  [调整] 策略实际起始日: {effective_start.date()}")

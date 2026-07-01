@@ -210,6 +210,16 @@ def fetch_pool_data(
     # - 默认模式下，需要等所有 ETF 都到齐且完成预热，因此取最晚的数据起始日/预热完成日。
     # - dynamic_pool 模式下，允许 ETF 分批就绪，整体回测从最早有数据的 ETF 开始。
     dynamic_pool = strategy.params.get("dynamic_pool", False)
+
+    # 打印每只 ETF 的数据起始日期，便于确认各品种可参与回测的时间
+    max_name_width = max(_display_width(name) for name in actual_starts)
+    start_lines = "\n".join(
+        f"      {_ljust(name, max_name_width)} : {d.date()}"
+        for name, d in sorted(actual_starts.items(), key=lambda x: x[1])
+    )
+    print("  [数据] 各 ETF 数据起始日期:")
+    print(start_lines)
+
     if dynamic_pool:
         effective_start = max(target_start_dt, earliest_etf_start)
     else:

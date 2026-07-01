@@ -163,6 +163,22 @@ def run(
         col = f"{prefix}{name}"
         df[f"权重_{name}"] = (rank_df[col] <= top_n).astype(float) / top_n
 
+    # dynamic_pool：可选 ETF 不足 top_n 时，剩余仓位优先填充已就绪的 safe_haven
+    if dynamic_pool:
+        weight_cols = [f"权重_{n}" for n in name_list]
+        for date in df.index:
+            eligible_names = eligible_df.columns[eligible_df.loc[date]].tolist()
+            selected_count = int((df.loc[date, weight_cols] > 0).sum())
+            if selected_count < top_n:
+                fill_weight = (top_n - selected_count) / top_n
+                safe_haven = params.get("safe_haven")
+                if safe_haven and safe_haven in eligible_names:
+                    df.loc[date, f"权重_{safe_haven}"] += fill_weight
+            # 归一化，确保总权重为 1.0
+            total_weight = df.loc[date, weight_cols].sum()
+            if total_weight > 0:
+                df.loc[date, weight_cols] /= total_weight
+
     # 3.1 换仓阈值 Buffer（仅支持 top_n=1）
     # 实盘时避免 0.152 vs 0.151 这种微小差距就触发换仓。只有当新第一名的得分
     # 超过当前持仓得分的 (1 + buffer) 倍时才允许换仓，从而压低换手率。

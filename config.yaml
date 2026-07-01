@@ -103,7 +103,7 @@ strategies:
           atr_lookback: 14
         layer3:
           enabled: true
-          target_vol: 0.25
+          target_vol: 0.15
           vol_lookback: 23
           comfort_zone: 0.15
           caution_zone: 0.27

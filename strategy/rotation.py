@@ -294,26 +294,27 @@ def run(
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
 
-        risk_names = [n for n in name_list if n != safe_haven]
-        for name in risk_names:
-            scaled = pre_weights[f"权重_{name}"] > df[f"权重_{name}"]
-            if scaled.any():
-                df.loc[scaled, "风控原因"] += (
-                    f"{name}: 目标波动率平准(组合波动>{comfort_zone:.1%}"
-                    f"或>{caution_zone:.1%}); "
-                )
+        # 区分“警惕区（仓位压缩）”和“熔断区（强制清仓）”，写出明确的风控原因
+        risk_cols = [f"权重_{n}" for n in name_list if n != safe_haven]
+        pre_risk_weight = pre_weights[risk_cols].sum(axis=1)
+        post_risk_weight = df[risk_cols].sum(axis=1)
+
+        panic = (pre_risk_weight > 0) & (post_risk_weight == 0)
+        if panic.any():
+            df.loc[panic, "风控原因"] += (
+                f"Layer3: 波动率熔断(组合波动≥{caution_zone:.1%})，风险资产强制清仓; "
+            )
+
+        caution = (pre_risk_weight > post_risk_weight) & (post_risk_weight > 0)
+        if caution.any():
+            df.loc[caution, "风控原因"] += (
+                f"Layer3: 波动率警惕(组合波动{comfort_zone:.1%}~{caution_zone:.1%})，"
+                f"仓位压缩为{caution_scale:.0%}; "
+            )
 
     # 4. 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
     for name in name_list:
         df[f"权重_{name}"] = df[f"权重_{name}"].shift(1).fillna(0.0)
-
-    # 信号列的 NaN 仅影响当日排名，不影响已确定的 T+1 持仓及收益计算，
-    # 不同 ETF 的预热窗口不同（如宽基 252 日、跨境 ETF 数据缺失）会导致
-    # 信号列存在大量 NaN；若直接 dropna 会误删大量有效交易日，使净值曲线
-    # 出现虚假的水平段。因此先移除信号列，再按权重/收益列清理。
-    score_prefixes = ("自适应得分_", "得分_", "质量_", "涨幅_")
-    score_cols = [c for c in df.columns if c.startswith(score_prefixes)]
-    df = df.drop(columns=score_cols)
 
     # 权重为 0 时，该 ETF 的收益贡献应为 0；把收益列中的 NaN 填 0
     # 避免 0 * NaN = NaN 污染策略日收益率。

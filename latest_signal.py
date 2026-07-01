@@ -21,6 +21,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import unicodedata
 
@@ -80,14 +81,16 @@ def fetch_latest_data(strategy: StrategyConfig, app_config: AppConfig, data_sour
     lookback = strategy.params.get("lookback", 20)
     buffer_days = 20  # 缓冲，覆盖 lookback + 风控窗口 + 周末节假日
 
-    # 考虑风控参数所需的历史长度
-    required_trading_days = max(
-        lookback,
-        strategy.params.get("absolute_momentum_lookback", 0)
-        if strategy.params.get("absolute_momentum_filter")
-        else 0,
-        strategy.params.get("volatility_lookback", 0),
-    ) + buffer_days
+    # 考虑三层风控参数所需的历史长度
+    risk_control = strategy.params.get("risk_control", {})
+    risk_lookbacks = [lookback]
+    if risk_control.get("layer1", {}).get("enabled"):
+        risk_lookbacks.append(risk_control["layer1"].get("ma_lookback", 10))
+    if risk_control.get("layer2", {}).get("enabled"):
+        risk_lookbacks.append(risk_control["layer2"].get("atr_lookback", 14))
+    if risk_control.get("layer3", {}).get("enabled"):
+        risk_lookbacks.append(risk_control["layer3"].get("vol_lookback", 23))
+    required_trading_days = max(risk_lookbacks) + buffer_days
 
     today = datetime.now()
     # 交易日约占日历日的 ~5/7，2 倍余量可覆盖周末和节假日
@@ -262,19 +265,24 @@ def print_latest_signal(
         scores = []
         for name in name_list:
             score_col = f"{prefix}{name}"
-            score = latest[score_col] if score_col in latest else 0
+            score = latest[score_col] if score_col in latest else np.nan
             weight = latest[f"权重_{name}"] if f"权重_{name}" in latest else 0
             # 获取代码
             code = next((p.code for p in strategy.pool if p.name == name), "")
             last_date = last_quote_dates.get(name, "-") if last_quote_dates else "-"
             scores.append((name, code, last_date, score, weight))
 
-        scores.sort(key=lambda x: x[3], reverse=True)
+        scores.sort(key=lambda x: x[3] if not pd.isna(x[3]) else -np.inf, reverse=True)
 
         for i, (name, code, last_date, score, weight) in enumerate(scores, 1):
             marker = "★" if weight > 0 else " "
             weight_pct = f"{weight*100:.0f}%" if weight > 0 else "0%"
-            score_str = f"{score:+.2%}" if scoring == "momentum" else f"{score:.4f}"
+            if pd.isna(score):
+                score_str = "-"
+            elif scoring == "momentum":
+                score_str = f"{score:+.2%}"
+            else:
+                score_str = f"{score:.4f}"
             rank_str = f"{marker}{i}"
             row = (
                 f"{_ljust(rank_str, 4)} "
@@ -307,15 +315,44 @@ def print_latest_signal(
             if not added and not removed:
                 print("  [维持] 持仓不变")
 
-        # 打印风控触发原因（rotation 策略专用）
+        # 打印风控提醒（rotation 策略专用）
+        print(f"\n{'-'*60}")
+        print("风控提醒:")
+        risk_control = strategy.params.get("risk_control", {})
+        enabled_layers = []
+        if risk_control.get("layer1", {}).get("enabled"):
+            cfg = risk_control["layer1"]
+            enabled_layers.append(
+                f"Layer1 时序动量(ma={cfg.get('ma_lookback', 20)}, "
+                f"回撤>{cfg.get('drawdown_threshold', 0.05):.1%})"
+            )
+        if risk_control.get("layer2", {}).get("enabled"):
+            cfg = risk_control["layer2"]
+            enabled_layers.append(
+                f"Layer2 ATR止损({cfg.get('atr_multiplier', 3.0)}*ATR, "
+                f"lookback={cfg.get('atr_lookback', 14)})"
+            )
+        if risk_control.get("layer3", {}).get("enabled"):
+            cfg = risk_control["layer3"]
+            enabled_layers.append(
+                f"Layer3 波动率平准(target={cfg.get('target_vol', 0.08):.1%}, "
+                f"comfort={cfg.get('comfort_zone', 0.15):.1%}, "
+                f"caution={cfg.get('caution_zone', 0.25):.1%})"
+            )
+        if enabled_layers:
+            print(f"  · 已启用: {' | '.join(enabled_layers)}")
+        else:
+            print("  · 未启用任何风控层")
+
         risk_reason = latest.get("风控原因", "")
         if risk_reason:
-            print(f"{'-'*60}")
-            print("风控说明:")
+            print("  · 最新信号日触发以下风控，建议仓位已据此调整:")
             for reason in str(risk_reason).split(";"):
                 reason = reason.strip()
                 if reason:
-                    print(f"  · {reason}")
+                    print(f"    - {reason}")
+        else:
+            print("  · 最新信号日未触发风控，建议持仓由原始评分/动量决定")
 
         print(f"{'='*60}")
         print("操作建议:")

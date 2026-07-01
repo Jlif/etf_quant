@@ -188,33 +188,28 @@ def run(
             if total_weight > 0:
                 df.loc[date, weight_cols] /= total_weight
 
-    # 3.1 换仓阈值 Buffer（仅支持 top_n=1）
-    # 实盘时避免 0.152 vs 0.151 这种微小差距就触发换仓。只有当新第一名的得分
-    # 超过当前持仓得分的 (1 + buffer) 倍时才允许换仓，从而压低换手率。
-    rebalance_buffer = params.get("rebalance_buffer", 0.0)
-    if rebalance_buffer > 0 and top_n == 1:
-        weight_cols = [f"权重_{n}" for n in name_list]
-        for i in range(1, len(df)):
-            curr_date = df.index[i]
-            prev_date = df.index[i - 1]
-            prev_holding = df.loc[prev_date, weight_cols].idxmax().replace("权重_", "")
-            curr_top_score_col = df.loc[curr_date, signal_cols].idxmax()
-            curr_top = curr_top_score_col.replace(prefix, "")
-
-            if prev_holding != curr_top:
-                prev_score = df.loc[curr_date, f"{prefix}{prev_holding}"]
-                curr_score = df.loc[curr_date, curr_top_score_col]
-                if pd.isna(prev_score) or pd.isna(curr_score):
-                    continue
-                if curr_score <= prev_score * (1.0 + rebalance_buffer):
-                    # 新第一名优势不足，维持原持仓
-                    for name in name_list:
-                        df.loc[curr_date, f"权重_{name}"] = 1.0 if name == prev_holding else 0.0
-
     # 初始化风控原因列，用于记录每个过滤器对持仓的调整
     df["风控原因"] = ""
 
-    # 3.5 风控过滤器（可选）：绝对动量过滤
+    # 3.05 全市场绝对动量空仓保护（可选）
+    # 当 safe_haven 自身的绝对动量也不达标时，整体空仓。
+    if params.get("absolute_momentum_cash", False):
+        safe_haven = params.get("safe_haven")
+        abs_lookback = params.get("absolute_momentum_lookback", lookback)
+        abs_threshold = params.get("absolute_momentum_threshold", 0.0)
+        if safe_haven and safe_haven in close_df.columns:
+            safe_return = close_df[safe_haven] / close_df[safe_haven].shift(abs_lookback + 1) - 1.0
+            weight_cols = [f"权重_{n}" for n in name_list]
+            safe_col = f"权重_{safe_haven}"
+            safe_failing = (df[safe_col] > 0) & (safe_return <= abs_threshold)
+            if safe_failing.any():
+                for col in weight_cols:
+                    df.loc[safe_failing, col] = 0.0
+                df.loc[safe_failing, "风控原因"] += (
+                    f"{safe_haven}: 绝对动量空仓保护({abs_lookback}日收益≤{abs_threshold:.2%}); "
+                )
+
+    # 3.1 换仓阈值 Buffer（仅支持 top_n=1）
     if params.get("absolute_momentum_filter", False):
         safe_haven = params.get("safe_haven")
         if not safe_haven:

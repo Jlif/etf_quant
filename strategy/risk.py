@@ -54,6 +54,9 @@ def absolute_momentum_filter(
     # 计算每只标的的绝对动量
     abs_return = close_df / close_df.shift(lookback + 1) - 1.0
 
+    # 计算每只标的的绝对动量
+    abs_return = close_df / close_df.shift(lookback + 1) - 1.0
+
     for name in close_df.columns:
         if name == safe_haven:
             continue

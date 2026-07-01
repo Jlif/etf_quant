@@ -289,7 +289,8 @@ def run_strategy(
         benchmark_col = f"{name_list[0]}净值"
         benchmark_name = name_list[0]
         for name in name_list:
-            price = result[name].copy()
+            # 从原始 close 数据取价格，避免 rotation.run 截断/回填带来的偏差
+            price = data["close"][name].copy()
             # 若基准 ETF 数据起始晚于策略实际起始日，用首个有效价格回填，
             # 避免 quantstats 因基准缺数而把报告截断到更晚的日期。
             if name == benchmark_name:

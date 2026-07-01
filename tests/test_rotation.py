@@ -103,13 +103,15 @@ def test_adaptive_scoring_nan_score_gets_zero_weight():
     assert (result["权重_红利ETF"] > 0).any()
 
 
-def test_dynamic_pool_all_unavailable_is_cash():
-    """dynamic_pool=true 且所有 ETF 都不可用时，策略空仓，净值不变。"""
-    n = 70
+def test_dynamic_pool_unavailable_etf_gets_zero_weight():
+    """dynamic_pool=true 时，始终未满足预热条件的 ETF 权重为 0，可用 ETF 正常入选。"""
+    n = 80
     idx = pd.date_range("2023-01-01", periods=n)
     close = pd.DataFrame(
         {
-            "晚上市ETF": np.where(np.arange(n) < 45, np.nan, np.linspace(100, 110, n)),
+            "红利ETF": np.linspace(100, 120, n),
+            # 数据从 idx[60] 开始，有效长度 20 < lookback+1=21，全程不满足预热条件
+            "晚上市ETF": np.where(np.arange(n) < 60, np.nan, np.linspace(100, 110, n)),
         },
         index=idx,
     )
@@ -117,9 +119,12 @@ def test_dynamic_pool_all_unavailable_is_cash():
     data = {"close": close, "open": open_, "high": close * 1.01, "low": close * 0.99}
     params = {"lookback": 20, "scoring": "momentum", "top_n": 1, "dynamic_pool": True}
     result = run(data, list(close.columns), params)
-    # 所有行权重都应为 0，净值保持 1
+    # 晚上市 ETF 权重永远为 0
     assert (result["权重_晚上市ETF"] == 0).all()
-    assert (result["轮动策略净值"] == 1.0).all()
+    # 红利 ETF 在第一个有效信号后应被选中
+    assert (result["权重_红利ETF"] > 0).any()
+    # 策略净值应正常增长
+    assert result["轮动策略净值"].iloc[-1] > 1.0
 
 
 def test_dynamic_pool_fills_with_safe_haven():

@@ -70,11 +70,18 @@ def run(
     df = close_df.copy()
 
     # 1. 计算两种日收益率
+    dynamic_pool = params.get("dynamic_pool", False)
     for name in name_list:
         # 新调入标的：开盘价买入，收盘价结算
         df[f"日收益率_再平衡_{name}"] = close_df[name] / open_df[name] - 1.0
         # 继续持有标的：前日收盘价已持有，当日收盘价结算
         df[f"日收益率_持有_{name}"] = close_df[name] / close_df[name].shift(1) - 1.0
+        if dynamic_pool:
+            # 未上市/无数据期间，该 ETF 不会获得权重，收益列填 0
+            # 避免最终 dropna 把策略前期的有效交易日误删
+            missing_mask = close_df[name].isna()
+            df.loc[missing_mask, f"日收益率_再平衡_{name}"] = 0.0
+            df.loc[missing_mask, f"日收益率_持有_{name}"] = 0.0
 
     # 2. 计算得分（基于收盘价）
     if params.get("adaptive_scoring"):
@@ -114,7 +121,26 @@ def run(
         signal_cols = [f"涨幅_{v}" for v in name_list]
         prefix = "涨幅_"
 
-    if params.get("adaptive_scoring") or params.get("dynamic_pool", False):
+    # dynamic_pool 模式下，先根据原始数据计算每只 ETF 的最早可参与交易日，
+    # 然后再 dropna；避免先 dropna 后用截断后的 series.index[window-1] 导致 eligible_start 被推迟。
+    if dynamic_pool:
+        type_map = name_types or {}
+        eligible_start_map = {}
+        for name in name_list:
+            etf_type = type_map.get(name)
+            if params.get("adaptive_scoring"):
+                window = _adaptive_window(etf_type, lookback)
+            elif scoring == "slope_r2" or scoring == "momentum_quality":
+                window = lookback
+            else:
+                window = lookback + 1
+            series = df[name]
+            if len(series) >= window:
+                eligible_start_map[name] = series.index[window - 1]
+            else:
+                eligible_start_map[name] = None
+
+    if params.get("adaptive_scoring") or dynamic_pool:
         df = df.dropna(subset=signal_cols, how="all")
     else:
         df = df.dropna()
@@ -130,26 +156,7 @@ def run(
         )
 
     # 计算每日候选池可用性（dynamic_pool 模式下，未上市/未预热的 ETF 不纳入排名）
-    dynamic_pool = params.get("dynamic_pool", False)
     if dynamic_pool:
-        type_map = name_types or {}
-        eligible_start_map = {}
-        for name in name_list:
-            etf_type = type_map.get(name)
-            if params.get("adaptive_scoring"):
-                window = _adaptive_window(etf_type, lookback)
-            elif scoring == "slope_r2" or scoring == "momentum_quality":
-                window = lookback
-            else:
-                # momentum
-                window = lookback + 1
-            series = df[name]
-            if len(series) >= window:
-                eligible_start_map[name] = series.index[window - 1]
-            else:
-                # 数据长度不足 window，整个回测期间都不可用
-                eligible_start_map[name] = None
-
         eligible_df = pd.DataFrame(False, index=df.index, columns=name_list)
         for name in name_list:
             start = eligible_start_map[name]
@@ -294,7 +301,7 @@ def run(
 
     # 4. 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
     for name in name_list:
-        df[f"权重_{name}"] = df[f"权重_{name}"].shift(1)
+        df[f"权重_{name}"] = df[f"权重_{name}"].shift(1).fillna(0.0)
 
     # 信号列的 NaN 仅影响当日排名，不影响已确定的 T+1 持仓及收益计算，
     # 不同 ETF 的预热窗口不同（如宽基 252 日、跨境 ETF 数据缺失）会导致
@@ -303,6 +310,17 @@ def run(
     score_prefixes = ("自适应得分_", "得分_", "质量_", "涨幅_")
     score_cols = [c for c in df.columns if c.startswith(score_prefixes)]
     df = df.drop(columns=score_cols)
+
+    # dynamic_pool 模式下，原始价格列可能包含未上市 ETF 的 NaN，
+    # 会导致 dropna 误删策略前期的有效交易日。收益计算前移除原始价格列，
+    # 调用方（main.py）已从 data["close"] 独立获取价格用于基准净值。
+    df = df.drop(columns=[n for n in name_list if n in df.columns])
+
+    # 权重为 0 时，该 ETF 的收益贡献应为 0；把收益列中的 NaN 填 0
+    # 避免 0 * NaN = NaN 污染策略日收益率。
+    for name in name_list:
+        df[f"日收益率_再平衡_{name}"] = df[f"日收益率_再平衡_{name}"].fillna(0.0)
+        df[f"日收益率_持有_{name}"] = df[f"日收益率_持有_{name}"].fillna(0.0)
 
     df = df.dropna()
 

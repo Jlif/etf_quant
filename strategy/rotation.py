@@ -311,18 +311,21 @@ def run(
     score_cols = [c for c in df.columns if c.startswith(score_prefixes)]
     df = df.drop(columns=score_cols)
 
-    # dynamic_pool 模式下，原始价格列可能包含未上市 ETF 的 NaN，
-    # 会导致 dropna 误删策略前期的有效交易日。收益计算前移除原始价格列，
-    # 调用方（main.py）已从 data["close"] 独立获取价格用于基准净值。
-    df = df.drop(columns=[n for n in name_list if n in df.columns])
-
     # 权重为 0 时，该 ETF 的收益贡献应为 0；把收益列中的 NaN 填 0
     # 避免 0 * NaN = NaN 污染策略日收益率。
     for name in name_list:
         df[f"日收益率_再平衡_{name}"] = df[f"日收益率_再平衡_{name}"].fillna(0.0)
         df[f"日收益率_持有_{name}"] = df[f"日收益率_持有_{name}"].fillna(0.0)
 
-    df = df.dropna()
+    # dynamic_pool 模式下，原始价格列可能包含未上市 ETF 的 NaN，
+    # 但 plot_nav_curves 等后续流程需要这些列。dropna 时只检查权重/收益列，
+    # 不检查原始价格列，避免误删策略前期的有效交易日。
+    check_cols = (
+        [f"权重_{n}" for n in name_list]
+        + [f"日收益率_再平衡_{n}" for n in name_list]
+        + [f"日收益率_持有_{n}" for n in name_list]
+    )
+    df = df.dropna(subset=check_cols)
 
     # 5. 计算策略日收益率
     #    区分新调入（按开盘价成交）和继续持有（按前日收盘价持有）

@@ -81,7 +81,7 @@ strategies:
       - { code: "510300", name: "沪深300ETF", type: "宽基" }
       - { code: "513500", name: "标普500ETF博时", type: "宽基" }
       - { code: "518880", name: "黄金ETF", type: "商品" }
-      # - { code: "588080", name: "科创50ETF易方达", type: "成长" }
+      - { code: "588080", name: "科创50ETF易方达", type: "成长" }
       # - { code: "159361", name: "A500ETF易方达", type: "宽基" }
       # - { code: "159201", name: "自由现金流ETF华夏", type: "自由现金流" }
     params:
@@ -90,7 +90,7 @@ strategies:
       adaptive_scoring: false
       benchmark: "沪深300ETF"
       top_n: 1
-      dynamic_pool: true       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
+      dynamic_pool: false       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
       safe_haven: "10年国债ETF国泰"
       risk_control:
         layer1:

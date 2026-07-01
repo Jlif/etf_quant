@@ -103,6 +103,26 @@ def test_adaptive_scoring_nan_score_gets_zero_weight():
     assert (result["权重_红利ETF"] > 0).any()
 
 
+def test_dynamic_pool_false_keeps_original_behavior():
+    """dynamic_pool=false（默认）时，所有 ETF 同时可用，行为不变。"""
+    n = 100
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {
+            "红利ETF": np.linspace(100, 120, n),
+            "创业板ETF": np.linspace(100, 110, n),
+        },
+        index=idx,
+    )
+    open_ = close.copy()
+    data = {"close": close, "open": open_, "high": close * 1.01, "low": close * 0.99}
+    params = {"lookback": 20, "scoring": "momentum", "top_n": 1}
+    result = run(data, list(close.columns), params)
+    assert "轮动策略净值" in result.columns
+    assert result["轮动策略净值"].iloc[-1] > 0
+    assert (result["权重_红利ETF"] > 0).any()
+
+
 def test_adaptive_scoring_unknown_type_uses_lookback():
     """未知/缺失类型应使用默认 lookback，而不是 252。"""
     n = 50  # 小于 252，但大于默认 lookback 20

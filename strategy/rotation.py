@@ -114,7 +114,7 @@ def run(
         signal_cols = [f"涨幅_{v}" for v in name_list]
         prefix = "涨幅_"
 
-    if params.get("adaptive_scoring"):
+    if params.get("adaptive_scoring") or params.get("dynamic_pool", False):
         df = df.dropna(subset=signal_cols, how="all")
     else:
         df = df.dropna()

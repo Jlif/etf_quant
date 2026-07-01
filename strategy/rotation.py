@@ -129,8 +129,36 @@ def run(
             f"共 {len(data['close'])} 条"
         )
 
+    # 计算每日候选池可用性（dynamic_pool 模式下，未上市/未预热的 ETF 不纳入排名）
+    dynamic_pool = params.get("dynamic_pool", False)
+    if dynamic_pool:
+        type_map = name_types or {}
+        eligible_start = {}
+        for name in name_list:
+            etf_type = type_map.get(name)
+            if params.get("adaptive_scoring"):
+                window = _adaptive_window(etf_type, lookback)
+            elif scoring == "slope_r2" or scoring == "momentum_quality":
+                window = lookback
+            else:
+                # momentum
+                window = lookback + 1
+            series = df[name]
+            if len(series) >= window:
+                eligible_start[name] = series.index[window - 1]
+            else:
+                eligible_start[name] = series.index[-1] + pd.Timedelta(days=1)
+
+        eligible_df = pd.DataFrame(
+            {name: df.index >= eligible_start[name] for name in name_list},
+            index=df.index,
+        )
+    else:
+        eligible_df = pd.DataFrame(True, index=df.index, columns=name_list)
+
     # 3. 生成每日权重：top_n 等权，其余为 0
-    rank_df = df[signal_cols].rank(axis=1, ascending=False, method="first", na_option="keep")
+    eligible_signal_df = df[signal_cols].where(eligible_df.values)
+    rank_df = eligible_signal_df.rank(axis=1, ascending=False, method="first", na_option="keep")
     for name in name_list:
         col = f"{prefix}{name}"
         df[f"权重_{name}"] = (rank_df[col] <= top_n).astype(float) / top_n

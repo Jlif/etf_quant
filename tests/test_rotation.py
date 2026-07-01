@@ -103,6 +103,27 @@ def test_adaptive_scoring_nan_score_gets_zero_weight():
     assert (result["权重_红利ETF"] > 0).any()
 
 
+def test_dynamic_pool_excludes_not_ready_etfs():
+    """dynamic_pool=true 时，未满足预热窗口的 ETF 权重为 0。"""
+    n = 100
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {
+            "红利ETF": np.linspace(100, 120, n),
+            "晚上市ETF": np.where(np.arange(n) < 30, np.nan, np.linspace(100, 110, n)),
+        },
+        index=idx,
+    )
+    open_ = close.copy()
+    data = {"close": close, "open": open_, "high": close * 1.01, "low": close * 0.99}
+    params = {"lookback": 20, "scoring": "momentum", "top_n": 1, "dynamic_pool": True}
+    result = run(data, list(close.columns), params)
+    # 前若干天晚上市 ETF 权重应为 0
+    assert (result["权重_晚上市ETF"].iloc[:10] == 0).all()
+    # 红利 ETF 应被选中
+    assert (result["权重_红利ETF"] > 0).any()
+
+
 def test_dynamic_pool_false_keeps_original_behavior():
     """dynamic_pool=false（默认）时，所有 ETF 同时可用，行为不变。"""
     n = 100

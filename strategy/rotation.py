@@ -133,7 +133,7 @@ def run(
     dynamic_pool = params.get("dynamic_pool", False)
     if dynamic_pool:
         type_map = name_types or {}
-        eligible_start = {}
+        eligible_start_map = {}
         for name in name_list:
             etf_type = type_map.get(name)
             if params.get("adaptive_scoring"):
@@ -145,14 +145,16 @@ def run(
                 window = lookback + 1
             series = df[name]
             if len(series) >= window:
-                eligible_start[name] = series.index[window - 1]
+                eligible_start_map[name] = series.index[window - 1]
             else:
-                eligible_start[name] = series.index[-1] + pd.Timedelta(days=1)
+                # 数据长度不足 window，整个回测期间都不可用
+                eligible_start_map[name] = None
 
-        eligible_df = pd.DataFrame(
-            {name: df.index >= eligible_start[name] for name in name_list},
-            index=df.index,
-        )
+        eligible_df = pd.DataFrame(False, index=df.index, columns=name_list)
+        for name in name_list:
+            start = eligible_start_map[name]
+            if start is not None:
+                eligible_df[name] = df.index >= start
     else:
         eligible_df = pd.DataFrame(True, index=df.index, columns=name_list)
 

@@ -89,6 +89,7 @@ strategies:
       adaptive_scoring: false
       benchmark: "沪深300ETF"
       top_n: 1
+      dynamic_pool: false       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
       absolute_momentum_filter: true
       absolute_momentum_lookback: 9
       absolute_momentum_threshold: 0.0

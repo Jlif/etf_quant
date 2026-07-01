@@ -42,6 +42,7 @@ config.yaml → utils/config.py (AppConfig) → main.py
 
 - **`strategy/`**：策略实现
   - `rotation.run(data, name_list, params)`：每日计算得分（`momentum` 或 `slope_r2`），选 top_n 等权，持仓权重前移1天（T日收益由T-1日持仓产生）
+    - `dynamic_pool`（可选，默认 false）：为 true 时，每日仅将已满足预热窗口的 ETF 纳入轮动候选池；当可选 ETF 不足 `top_n` 时，剩余仓位优先分配给已就绪的 `safe_haven`，否则空仓。整体回测起始日不再被最晚预热 ETF 拖后。
   - `weighted.run(data, name_list, weights, params)`：权重以百分数传入（如 25 表示 25%），`rebalance_freq=1` 为每日再平衡，>1 时模拟权重漂移后再平衡
 
 - **`core/`**：评分与报告

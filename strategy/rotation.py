@@ -11,7 +11,11 @@ from core.scorer import (
     momentum_score,
     slope_r2_score,
 )
-from .risk import absolute_momentum_filter, trailing_stop_filter, volatility_target_filter
+from .risk import (
+    layer1_market_filter,
+    layer2_atr_trailing_stop,
+    layer3_vol_target_filter,
+)
 
 
 def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
@@ -191,107 +195,112 @@ def run(
     # 初始化风控原因列，用于记录每个过滤器对持仓的调整
     df["风控原因"] = ""
 
-    # 3.05 全市场绝对动量空仓保护（可选）
-    # 当 safe_haven 自身的绝对动量也不达标时，整体空仓。
-    if params.get("absolute_momentum_cash", False):
-        safe_haven = params.get("safe_haven")
-        abs_lookback = params.get("absolute_momentum_lookback", lookback)
-        abs_threshold = params.get("absolute_momentum_threshold", 0.0)
-        if safe_haven and safe_haven in close_df.columns:
-            safe_return = close_df[safe_haven] / close_df[safe_haven].shift(abs_lookback + 1) - 1.0
-            weight_cols = [f"权重_{n}" for n in name_list]
-            safe_col = f"权重_{safe_haven}"
-            safe_failing = (df[safe_col] > 0) & (safe_return <= abs_threshold)
-            if safe_failing.any():
-                for col in weight_cols:
-                    df.loc[safe_failing, col] = 0.0
-                df.loc[safe_failing, "风控原因"] += (
-                    f"{safe_haven}: 绝对动量空仓保护({abs_lookback}日收益≤{abs_threshold:.2%}); "
-                )
+    # 3.05–3.7 三层风控系统
+    risk_control = params.get("risk_control", {})
 
-    # 3.1 换仓阈值 Buffer（仅支持 top_n=1）
-    if params.get("absolute_momentum_filter", False):
+    # 3.05 第一层：时序动量过滤
+    layer1 = risk_control.get("layer1", {})
+    if layer1.get("enabled", False):
         safe_haven = params.get("safe_haven")
         if not safe_haven:
-            raise ValueError("开启 absolute_momentum_filter 时必须配置 safe_haven")
-        abs_lookback = params.get("absolute_momentum_lookback", lookback)
-        abs_threshold = params.get("absolute_momentum_threshold", 0.0)
+            raise ValueError("开启 risk_control.layer1 时必须配置 safe_haven")
+        benchmark_name = params.get("benchmark")
+        benchmark_series = (
+            close_df[benchmark_name]
+            if benchmark_name and benchmark_name in close_df.columns
+            else None
+        )
+        ma_lookback = layer1.get("ma_lookback", 20)
+        drawdown_threshold = layer1.get("drawdown_threshold", 0.05)
 
         weight_cols = [f"权重_{n}" for n in name_list]
         weights_df = df[weight_cols].copy()
         pre_weights = weights_df.copy()
-        adjusted_weights = absolute_momentum_filter(
+        adjusted_weights = layer1_market_filter(
             weights_df=weights_df,
             close_df=close_df,
-            lookback=abs_lookback,
-            threshold=abs_threshold,
+            benchmark_series=benchmark_series,
+            ma_lookback=ma_lookback,
+            drawdown_threshold=drawdown_threshold,
             safe_haven=safe_haven,
         )
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
 
-        # 记录被该过滤器清零的标的
-        for name in name_list:
-            if name == safe_haven:
-                continue
-            triggered = (pre_weights[f"权重_{name}"] > 0) & (df[f"权重_{name}"] == 0)
-            if triggered.any():
-                df.loc[triggered, "风控原因"] += (
-                    f"{name}: 绝对动量过滤({abs_lookback}日收益≤{abs_threshold:.2%}); "
-                )
+        # 记录触发第一层的风控日
+        risk_cols = [c for c in weight_cols if c != f"权重_{safe_haven}"]
+        triggered = (pre_weights[risk_cols].sum(axis=1) > 0) & (
+            df[f"权重_{safe_haven}"] >= 0.999
+        )
+        if triggered.any():
+            df.loc[triggered, "风控原因"] += (
+                f"第一层: 时序动量过滤(跌破{ma_lookback}日均线或"
+                f"回撤>{drawdown_threshold:.1%}); "
+            )
 
-    # 3.6 风控过滤器（可选）：目标波动率控制
-    if params.get("target_volatility") is not None:
-        target_vol = params["target_volatility"]
-        vol_lookback = params.get("volatility_lookback", 20)
+    # 3.6 第二层：ATR 跟踪止损拦截
+    layer2 = risk_control.get("layer2", {})
+    if layer2.get("enabled", False):
         safe_haven = params.get("safe_haven")
+        atr_multiplier = layer2.get("atr_multiplier", 3.0)
+        atr_lookback = layer2.get("atr_lookback", 14)
 
         weight_cols = [f"权重_{n}" for n in name_list]
         weights_df = df[weight_cols].copy()
         pre_weights = weights_df.copy()
-        adjusted_weights = volatility_target_filter(
+        adjusted_weights = layer2_atr_trailing_stop(
+            weights_df=weights_df,
+            close_df=close_df,
+            high_df=data["high"],
+            low_df=data["low"],
+            atr_multiplier=atr_multiplier,
+            atr_lookback=atr_lookback,
+            safe_haven=safe_haven,
+        )
+        for name in name_list:
+            df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
+
+        risk_names = [n for n in name_list if n != safe_haven]
+        for name in risk_names:
+            triggered = (pre_weights[f"权重_{name}"] > 0) & (df[f"权重_{name}"] == 0)
+            if triggered.any():
+                df.loc[triggered, "风控原因"] += (
+                    f"{name}: ATR跟踪止损(回落>{atr_multiplier}*ATR); "
+                )
+
+    # 3.7 第三层：目标波动率平准（非线性）
+    layer3 = risk_control.get("layer3", {})
+    if layer3.get("enabled", False):
+        safe_haven = params.get("safe_haven")
+        target_vol = layer3["target_vol"]
+        vol_lookback = layer3.get("vol_lookback", 20)
+        comfort_zone = layer3.get("comfort_zone", 0.15)
+        caution_zone = layer3.get("caution_zone", 0.25)
+        caution_scale = layer3.get("caution_scale", 0.5)
+
+        weight_cols = [f"权重_{n}" for n in name_list]
+        weights_df = df[weight_cols].copy()
+        pre_weights = weights_df.copy()
+        adjusted_weights = layer3_vol_target_filter(
             weights_df=weights_df,
             close_df=close_df,
             target_vol=target_vol,
             vol_lookback=vol_lookback,
+            comfort_zone=comfort_zone,
+            caution_zone=caution_zone,
+            caution_scale=caution_scale,
             safe_haven=safe_haven,
         )
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
 
-        # 记录被降仓的风险资产
         risk_names = [n for n in name_list if n != safe_haven]
         for name in risk_names:
             scaled = pre_weights[f"权重_{name}"] > df[f"权重_{name}"]
             if scaled.any():
                 df.loc[scaled, "风控原因"] += (
-                    f"{name}: 目标波动率控制(组合波动>{target_vol:.2%}); "
-                )
-
-    # 3.7 风控过滤器（可选）：移动止损
-    if params.get("trailing_stop_pct") is not None:
-        stop_pct = params["trailing_stop_pct"]
-        safe_haven = params.get("safe_haven")
-
-        weight_cols = [f"权重_{n}" for n in name_list]
-        weights_df = df[weight_cols].copy()
-        pre_weights = weights_df.copy()
-        adjusted_weights = trailing_stop_filter(
-            weights_df=weights_df,
-            close_df=close_df,
-            stop_pct=stop_pct,
-            safe_haven=safe_haven,
-        )
-        for name in name_list:
-            df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
-
-        # 记录被该过滤器清仓的标的
-        risk_names = [n for n in name_list if n != safe_haven]
-        for name in risk_names:
-            triggered = (pre_weights[f"权重_{name}"] > 0) & (df[f"权重_{name}"] == 0)
-            if triggered.any():
-                df.loc[triggered, "风控原因"] += (
-                    f"{name}: 移动止损触发(回撤≥{stop_pct:.2%}); "
+                    f"{name}: 目标波动率平准(组合波动>{comfort_zone:.1%}"
+                    f"或>{caution_zone:.1%}); "
                 )
 
     # 4. 持仓权重前移1天（T日收盘后信号决定T+1日持仓）

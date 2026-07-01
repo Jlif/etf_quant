@@ -217,3 +217,241 @@ def trailing_stop_filter(
                     hwm.loc[date, name] = np.nan
 
     return adjusted
+
+
+def layer1_market_filter(
+    weights_df: pd.DataFrame,
+    close_df: pd.DataFrame,
+    benchmark_series: pd.Series | None,
+    ma_lookback: int,
+    drawdown_threshold: float,
+    safe_haven: str,
+) -> pd.DataFrame:
+    """
+    第一层：时序动量过滤。
+
+    当市场代理价格跌破 N 日均线，或从前期高点回撤超过阈值时，
+    强制清空所有风险资产仓位，全部转入 safe_haven。
+
+    Parameters
+    ----------
+    weights_df : pd.DataFrame
+        列名为 "权重_{标的名称}" 的每日权重表。
+    close_df : pd.DataFrame
+        收盘价表，用于构建 pool 等权市场代理（benchmark 未配置时）。
+    benchmark_series : pd.Series | None
+        外部基准序列（如 params.benchmark 对应的收盘价）。若为空则使用 pool 等权价格。
+    ma_lookback : int
+        均线回望周期。
+    drawdown_threshold : float
+        回撤阈值，例如 0.05 表示回撤 5% 即触发。
+    safe_haven : str
+        避风港标的名称。
+
+    Returns
+    -------
+    pd.DataFrame
+        调整后的权重表（副本）。
+    """
+    adjusted = weights_df.copy()
+    weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
+
+    if benchmark_series is not None:
+        market = benchmark_series.reindex(adjusted.index)
+    else:
+        market = close_df.mean(axis=1)
+
+    ma = market.rolling(ma_lookback).mean()
+    peak = market.expanding().max()
+    drawdown = (market - peak) / peak
+
+    triggered = (market < ma) | (drawdown < -drawdown_threshold)
+    if not triggered.any():
+        return adjusted
+
+    risk_cols = [c for c in weight_cols if c != f"权重_{safe_haven}"]
+    safe_col = f"权重_{safe_haven}"
+
+    # 触发日：风险资产全部转给 safe_haven
+    for col in risk_cols:
+        adjusted.loc[triggered, safe_col] += adjusted.loc[triggered, col]
+        adjusted.loc[triggered, col] = 0.0
+
+    # 归一化，避免浮点误差导致权重和不为 1
+    total = adjusted[weight_cols].sum(axis=1)
+    adjusted = adjusted.div(total, axis=0).fillna(0.0)
+    return adjusted
+
+
+def layer2_atr_trailing_stop(
+    weights_df: pd.DataFrame,
+    close_df: pd.DataFrame,
+    high_df: pd.DataFrame,
+    low_df: pd.DataFrame,
+    atr_multiplier: float,
+    atr_lookback: int,
+    safe_haven: str | None,
+) -> pd.DataFrame:
+    """
+    第二层：ATR 跟踪止损拦截。
+
+    对每只风险资产维护持仓期间最高价（high water mark）。
+    若收盘价从 HWM 回落超过 atr_multiplier * ATR，则清仓并转入 safe_haven。
+
+    Parameters
+    ----------
+    weights_df : pd.DataFrame
+        列名为 "权重_{标的名称}" 的每日权重表。
+    close_df : pd.DataFrame
+        收盘价表。
+    high_df : pd.DataFrame
+        最高价表。
+    low_df : pd.DataFrame
+        最低价表。
+    atr_multiplier : float
+        ATR 乘数，例如 3.0 表示回落 3 倍 ATR 触发止损。
+    atr_lookback : int
+        ATR 回望周期。
+    safe_haven : str | None
+        止损后资金去向。若为 None 则该部分空仓。
+
+    Returns
+    -------
+    pd.DataFrame
+        调整后的权重表（副本）。
+    """
+    adjusted = weights_df.copy()
+    weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
+    name_list = [c.replace("权重_", "") for c in weight_cols]
+    risk_names = [n for n in name_list if n != safe_haven]
+
+    # True Range
+    tr = pd.DataFrame(index=adjusted.index, columns=risk_names)
+    for name in risk_names:
+        tr[name] = pd.concat(
+            [
+                high_df[name] - low_df[name],
+                (high_df[name] - close_df[name].shift(1)).abs(),
+                (low_df[name] - close_df[name].shift(1)).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+    atr = tr.rolling(atr_lookback).mean()
+
+    hwm = pd.DataFrame(np.nan, index=adjusted.index, columns=risk_names)
+
+    for i, date in enumerate(adjusted.index):
+        for name in risk_names:
+            weight_col = f"权重_{name}"
+            current_weight = adjusted.loc[date, weight_col]
+            current_price = close_df.loc[date, name]
+
+            prev_weight = adjusted.iloc[i - 1][weight_col] if i > 0 else 0.0
+
+            if current_weight > 0 and prev_weight == 0:
+                hwm.loc[date, name] = current_price
+            elif current_weight > 0 and prev_weight > 0:
+                prev_hwm = hwm.iloc[i - 1][name]
+                hwm.loc[date, name] = max(prev_hwm, current_price)
+            else:
+                hwm.loc[date, name] = np.nan
+
+            if current_weight > 0 and not pd.isna(hwm.loc[date, name]):
+                current_atr = atr.loc[date, name]
+                if pd.isna(current_atr):
+                    continue
+                if current_price < hwm.loc[date, name] - atr_multiplier * current_atr:
+                    if safe_haven and safe_haven in name_list:
+                        safe_col = f"权重_{safe_haven}"
+                        adjusted.loc[date, safe_col] += current_weight
+                    adjusted.loc[date, weight_col] = 0.0
+                    hwm.loc[date, name] = np.nan
+
+    # 归一化
+    total = adjusted[weight_cols].sum(axis=1)
+    adjusted = adjusted.div(total, axis=0).fillna(0.0)
+    return adjusted
+
+
+def layer3_vol_target_filter(
+    weights_df: pd.DataFrame,
+    close_df: pd.DataFrame,
+    target_vol: float,
+    vol_lookback: int,
+    comfort_zone: float,
+    caution_zone: float,
+    caution_scale: float,
+    safe_haven: str | None,
+) -> pd.DataFrame:
+    """
+    第三层：目标波动率平准（非线性）。
+
+    计算组合 EWMA 年化波动率，按分段函数缩放风险资产仓位：
+    - 波动率 < comfort_zone：线性缩放（target_vol / realized_vol），上限 1.0
+    - comfort_zone <= 波动率 < caution_zone：线性结果 * caution_scale
+    - 波动率 >= caution_zone：强制清零
+
+    Parameters
+    ----------
+    weights_df : pd.DataFrame
+        列名为 "权重_{标的名称}" 的每日权重表。
+    close_df : pd.DataFrame
+        收盘价表。
+    target_vol : float
+        目标年化波动率，例如 0.10 表示 10%。
+    vol_lookback : int
+        EWMA 波动率的 span 参数。
+    comfort_zone : float
+        舒适区波动率上限。
+    caution_zone : float
+        警惕区波动率上限。
+    caution_scale : float
+        警惕区仓位缩放系数。
+    safe_haven : str | None
+        减仓后承接资金的去向。若为 None 则空仓。
+
+    Returns
+    -------
+    pd.DataFrame
+        调整后的权重表（副本）。
+    """
+    if target_vol <= 0:
+        raise ValueError("target_vol 必须大于 0")
+    if not (0 < comfort_zone < caution_zone):
+        raise ValueError("必须满足 0 < comfort_zone < caution_zone")
+
+    adjusted = weights_df.copy()
+    weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
+    name_list = [c.replace("权重_", "") for c in weight_cols]
+
+    returns = close_df.pct_change(fill_method=None)
+    portfolio_returns = pd.Series(0.0, index=adjusted.index)
+    for name in name_list:
+        portfolio_returns += adjusted[f"权重_{name}"] * returns[name]
+
+    ewma_vol = portfolio_returns.ewm(span=vol_lookback).std() * np.sqrt(252)
+    linear_scale = (target_vol / ewma_vol).fillna(1.0).clip(upper=1.0)
+
+    scale = pd.Series(np.nan, index=ewma_vol.index)
+    mask_comfort = ewma_vol < comfort_zone
+    mask_caution = (ewma_vol >= comfort_zone) & (ewma_vol < caution_zone)
+    mask_panic = ewma_vol >= caution_zone
+
+    scale[mask_comfort] = linear_scale[mask_comfort]
+    scale[mask_caution] = linear_scale[mask_caution] * caution_scale
+    scale[mask_panic] = 0.0
+    scale = scale.fillna(1.0)
+
+    if safe_haven and safe_haven in name_list:
+        risk_names = [n for n in name_list if n != safe_haven]
+    else:
+        risk_names = name_list
+
+    for name in risk_names:
+        adjusted[f"权重_{name}"] *= scale
+
+    if safe_haven and safe_haven in name_list:
+        safe_col = f"权重_{safe_haven}"
+        adjusted[safe_col] = 1.0 - adjusted[[f"权重_{n}" for n in risk_names]].sum(axis=1)
+
+    return adjusted

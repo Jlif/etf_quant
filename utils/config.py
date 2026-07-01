@@ -83,16 +83,16 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                     )
 
         # 校验需要 safe_haven 的风控参数
+        risk_control = params.get("risk_control", {})
         needs_safe_haven = (
-            params.get("absolute_momentum_filter", False)
-            or params.get("target_volatility") is not None
-            or params.get("trailing_stop_pct") is not None
+            risk_control.get("layer1", {}).get("enabled", False)
+            or risk_control.get("layer2", {}).get("enabled", False)
         )
         if needs_safe_haven:
             safe_haven = params.get("safe_haven")
             if not safe_haven:
                 raise ValueError(
-                    f'策略 "{s["name"]}" 开启风控过滤器时必须配置 safe_haven'
+                    f'策略 "{s["name"]}" 开启 risk_control.layer1/layer2 时必须配置 safe_haven'
                 )
             pool_names = {p.name for p in pool}
             if safe_haven not in pool_names:

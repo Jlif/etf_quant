@@ -89,13 +89,23 @@ strategies:
       scoring: momentum
       adaptive_scoring: false
       benchmark: "沪深300ETF"
-      top_n: 2
+      top_n: 1
       dynamic_pool: true       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
-      absolute_momentum_filter: true
-      absolute_momentum_lookback: 9
-      absolute_momentum_threshold: 0.0
       safe_haven: "10年国债ETF国泰"
-      target_volatility: 0.08
-      volatility_lookback: 26
-      trailing_stop_pct: 0.07
-      rebalance_buffer: 0.05
+      risk_control:
+        layer1:
+          enabled: true
+          ma_lookback: 10
+          drawdown_threshold: 0.41
+        layer2:
+          enabled: true
+          atr_multiplier: 3.0
+          atr_lookback: 14
+        layer3:
+          enabled: true
+          target_vol: 0.25
+          vol_lookback: 23
+          comfort_zone: 0.15
+          caution_zone: 0.27
+          caution_scale: 0.4
+      rebalance_buffer: 0.2

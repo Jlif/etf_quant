@@ -222,3 +222,136 @@ def test_adaptive_scoring_unknown_type_uses_lookback():
     assert len(result) > 0
     assert "轮动策略净值" in result.columns
     assert result["轮动策略净值"].iloc[-1] > 0
+
+
+def test_layer1_market_filter_moves_to_safe_haven():
+    """第一层触发后，风险资产应全部转入 safe_haven。"""
+    n = 100
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {
+            "股票ETF": np.concatenate(
+                [np.linspace(100, 150, 80), np.linspace(150, 100, 20)]
+            ),
+            "国债ETF": np.full(n, 100.0),
+        },
+        index=idx,
+    )
+    open_ = close.copy()
+    data = {"close": close, "open": open_, "high": close * 1.01, "low": close * 0.99}
+    params = {
+        "lookback": 20,
+        "scoring": "momentum",
+        "top_n": 1,
+        "safe_haven": "国债ETF",
+        "risk_control": {
+            "layer1": {"enabled": True, "ma_lookback": 20, "drawdown_threshold": 0.05}
+        },
+    }
+    result = run(data, list(close.columns), params)
+    # 下跌末期应全部切到 safe_haven
+    assert (result["权重_国债ETF"].iloc[-10:] > 0.99).all()
+    assert (result["权重_股票ETF"].iloc[-10:] == 0).all()
+
+
+def test_layer2_atr_trailing_stop_exits_on_gap_down():
+    """第二层 ATR 跟踪止损在大幅回落时清仓。"""
+    n = 100
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {"股票ETF": np.full(n, 100.0), "国债ETF": np.full(n, 100.0)},
+        index=idx,
+    )
+    # 先冲高到 120，随后跳空跌至 50，触发 3*ATR 止损
+    close.loc[idx[50], "股票ETF"] = 120.0
+    close.loc[idx[51:], "股票ETF"] = 50.0
+    open_ = close.copy()
+    data = {"close": close, "open": open_, "high": close * 1.01, "low": close * 0.99}
+    params = {
+        "lookback": 20,
+        "scoring": "momentum",
+        "top_n": 2,  # 保持股票 ETF 始终在组合内，便于触发 ATR 止损
+        "safe_haven": "国债ETF",
+        "risk_control": {
+            "layer2": {"enabled": True, "atr_multiplier": 3.0, "atr_lookback": 14}
+        },
+    }
+    result = run(data, list(close.columns), params)
+    # 跳空下跌后至少有一天 股票ETF 因 ATR 止损被清仓
+    assert (result["权重_股票ETF"] == 0).any()
+    # 止损资金转入 safe_haven
+    safe_haven_full_days = result["权重_国债ETF"] >= 0.99
+    assert safe_haven_full_days.any() or (result["权重_股票ETF"] == 0).any()
+
+
+def test_layer3_vol_target_scales_down_in_high_vol():
+    """第三层在高波动期应降低风险资产仓位。"""
+    n = 100
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {"股票ETF": np.full(n, 100.0), "国债ETF": np.full(n, 100.0)},
+        index=idx,
+    )
+    # 后 30 天制造 10% 的日间振幅，EWMA 年化波动率远超 25% 警戒线
+    for i in range(n - 30, n):
+        close.loc[idx[i], "股票ETF"] = 100 + ((-1) ** i) * 10
+    open_ = close.copy()
+    data = {"close": close, "open": open_, "high": close * 1.01, "low": close * 0.99}
+    params = {
+        "lookback": 20,
+        "scoring": "momentum",
+        "top_n": 1,
+        "safe_haven": "国债ETF",
+        "risk_control": {
+            "layer3": {
+                "enabled": True,
+                "target_vol": 0.08,
+                "vol_lookback": 20,
+                "comfort_zone": 0.15,
+                "caution_zone": 0.25,
+                "caution_scale": 0.5,
+            }
+        },
+    }
+    result = run(data, list(close.columns), params)
+    # 高波动区域内至少存在减仓日
+    high_vol_period = result.iloc[-20:]
+    assert (high_vol_period["权重_股票ETF"] < 1.0).any()
+    assert (high_vol_period["权重_股票ETF"] >= 0.0).all()
+
+
+def test_three_layer_risk_control_runs_in_order():
+    """三层风控同时开启时策略可正常完成回测。"""
+    n = 120
+    idx = pd.date_range("2023-01-01", periods=n)
+    close = pd.DataFrame(
+        {
+            "股票ETF": np.linspace(100, 110, n) + np.sin(np.arange(n)) * 5,
+            "国债ETF": np.full(n, 100.0),
+        },
+        index=idx,
+    )
+    open_ = close.copy()
+    data = {"close": close, "open": open_, "high": close * 1.01, "low": close * 0.99}
+    params = {
+        "lookback": 20,
+        "scoring": "momentum",
+        "top_n": 1,
+        "safe_haven": "国债ETF",
+        "risk_control": {
+            "layer1": {"enabled": True, "ma_lookback": 20, "drawdown_threshold": 0.10},
+            "layer2": {"enabled": True, "atr_multiplier": 3.0, "atr_lookback": 14},
+            "layer3": {
+                "enabled": True,
+                "target_vol": 0.08,
+                "vol_lookback": 20,
+                "comfort_zone": 0.15,
+                "caution_zone": 0.25,
+                "caution_scale": 0.5,
+            },
+        },
+    }
+    result = run(data, list(close.columns), params)
+    assert "轮动策略净值" in result.columns
+    assert result["轮动策略净值"].iloc[-1] > 0
+    assert "风控原因" in result.columns

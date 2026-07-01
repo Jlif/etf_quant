@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-风控参数网格扫描：测试不同 lookback、absolute_momentum_lookback、
-volatility_lookback、target_volatility、trailing_stop_pct 组合的收益/回撤表现。
+风控参数网格扫描：基于三层风控体系（layer1/layer2/layer3）扫描参数组合，
+按年化收益率（CAGR）倒序输出表现较好的组合。
 
 用法:
     python risk_param_sweep.py
-    python risk_param_sweep.py --lookbacks 20,22,25 --vol-lookbacks 10,20,30
-    python risk_param_sweep.py --output output/risk_sweep.csv
+    python risk_param_sweep.py --lookbacks 20,22,25 --l3-target-vols 0.06,0.08,0.1
+    python risk_param_sweep.py --output output/risk_sweep.csv --sort-by cagr
 """
 
 from __future__ import annotations
@@ -26,8 +26,23 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from data_source import get_data_source
 from main import fetch_pool_data, run_strategy
-from param_sweep import compute_metrics
 from utils import load_config
+
+
+def compute_metrics(nav: pd.Series) -> tuple[float, float, float]:
+    """从净值序列计算总收益、年化收益率（CAGR）和最大回撤。"""
+    total_return = nav.iloc[-1] / nav.iloc[0] - 1.0
+    n_years = len(nav) / 252.0
+    cagr = (
+        (nav.iloc[-1] / nav.iloc[0]) ** (1.0 / n_years) - 1.0
+        if n_years > 0 and nav.iloc[0] > 0
+        else 0.0
+    )
+    running_max = nav.expanding().max()
+    drawdown = (nav - running_max) / running_max
+    max_drawdown = drawdown.min()
+    return total_return, cagr, max_drawdown
+
 
 
 def _display_width(s: str) -> int:
@@ -51,10 +66,15 @@ def _ljust(s: str, width: int) -> str:
 @dataclass
 class SweepResult:
     lookback: int
-    abs_momentum_lookback: int
-    vol_lookback: int | None
-    target_vol: float | None
-    trailing_stop: float | None
+    l1_ma_lookback: int
+    l1_drawdown_threshold: float
+    l2_atr_multiplier: float
+    l2_atr_lookback: int
+    l3_target_vol: float
+    l3_vol_lookback: int
+    l3_comfort_zone: float
+    l3_caution_zone: float
+    l3_caution_scale: float
     total_return: float
     cagr: float
     max_drawdown: float
@@ -63,32 +83,12 @@ class SweepResult:
     n_days: int
 
 
-def _parse_float_list(s: str) -> list[float | None]:
-    """解析逗号分隔的浮点数，'none' 转为 None。"""
-    values = []
-    for part in s.split(","):
-        part = part.strip().lower()
-        if part in ("", "none", "null"):
-            values.append(None)
-        else:
-            values.append(float(part))
-    return values
+def _parse_float_list(s: str) -> list[float]:
+    return [float(x.strip()) for x in s.split(",") if x.strip()]
 
 
 def _parse_int_list(s: str) -> list[int]:
     return [int(x.strip()) for x in s.split(",") if x.strip()]
-
-
-def _parse_optional_int_list(s: str) -> list[int | None]:
-    """解析逗号分隔的整数，'none' 转为 None。"""
-    values = []
-    for part in s.split(","):
-        part = part.strip().lower()
-        if part in ("", "none", "null"):
-            values.append(None)
-        else:
-            values.append(int(part))
-    return values
 
 
 def _compute_sharpe(nav: pd.Series) -> float:
@@ -99,58 +99,125 @@ def _compute_sharpe(nav: pd.Series) -> float:
     return (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
 
 
+def _build_risk_control(
+    l1_ma_lookback: int,
+    l1_drawdown_threshold: float,
+    l2_atr_multiplier: float,
+    l2_atr_lookback: int,
+    l3_target_vol: float,
+    l3_vol_lookback: int,
+    l3_comfort_zone: float,
+    l3_caution_zone: float,
+    l3_caution_scale: float,
+) -> dict:
+    """构造新的 risk_control 参数字典。"""
+    return {
+        "layer1": {
+            "enabled": True,
+            "ma_lookback": l1_ma_lookback,
+            "drawdown_threshold": l1_drawdown_threshold,
+        },
+        "layer2": {
+            "enabled": True,
+            "atr_multiplier": l2_atr_multiplier,
+            "atr_lookback": l2_atr_lookback,
+        },
+        "layer3": {
+            "enabled": True,
+            "target_vol": l3_target_vol,
+            "vol_lookback": l3_vol_lookback,
+            "comfort_zone": l3_comfort_zone,
+            "caution_zone": l3_caution_zone,
+            "caution_scale": l3_caution_scale,
+        },
+    }
+
+
 def sweep_risk_params(
     strategy,
     app_config,
     data_source,
     lookbacks: list[int],
-    abs_lookbacks: list[int],
-    vol_lookbacks: list[int | None],
-    target_vols: list[float | None],
-    trailing_stops: list[float | None],
+    l1_ma_lookbacks: list[int],
+    l1_drawdown_thresholds: list[float],
+    l2_atr_multipliers: list[float],
+    l2_atr_lookbacks: list[int],
+    l3_target_vols: list[float],
+    l3_vol_lookbacks: list[int],
+    l3_comfort_zones: list[float],
+    l3_caution_zones: list[float],
+    l3_caution_scales: list[float],
     data: dict | None = None,
 ) -> list[SweepResult]:
-    """对多组风控参数做网格扫描。"""
+    """对多组三层风控参数做网格扫描。"""
     results: list[SweepResult] = []
     base_params = dict(strategy.params)
 
     total_combos = (
         len(lookbacks)
-        * len(abs_lookbacks)
-        * len(vol_lookbacks)
-        * len(target_vols)
-        * len(trailing_stops)
+        * len(l1_ma_lookbacks)
+        * len(l1_drawdown_thresholds)
+        * len(l2_atr_multipliers)
+        * len(l2_atr_lookbacks)
+        * len(l3_target_vols)
+        * len(l3_vol_lookbacks)
+        * len(l3_comfort_zones)
+        * len(l3_caution_zones)
+        * len(l3_caution_scales)
     )
     print(f"总共 {total_combos} 种参数组合\n")
 
+    combos = itertools.product(
+        lookbacks,
+        l1_ma_lookbacks,
+        l1_drawdown_thresholds,
+        l2_atr_multipliers,
+        l2_atr_lookbacks,
+        l3_target_vols,
+        l3_vol_lookbacks,
+        l3_comfort_zones,
+        l3_caution_zones,
+        l3_caution_scales,
+    )
+
     for (
         lookback,
-        abs_lb,
-        vol_lb,
-        target_vol,
-        trailing_stop,
-    ) in itertools.product(
-        lookbacks, abs_lookbacks, vol_lookbacks, target_vols, trailing_stops
-    ):
+        l1_ma_lb,
+        l1_dd,
+        l2_atr_mul,
+        l2_atr_lb,
+        l3_target_vol,
+        l3_vol_lb,
+        l3_comfort,
+        l3_caution,
+        l3_scale,
+    ) in combos:
         params = {**base_params}
         params["lookback"] = lookback
-        params["absolute_momentum_lookback"] = abs_lb
-        params["absolute_momentum_filter"] = True
 
-        if vol_lb is not None:
-            params["volatility_lookback"] = vol_lb
-        else:
-            params.pop("volatility_lookback", None)
+        # 清理旧风控参数，避免与三层风控冲突
+        for old_key in (
+            "absolute_momentum_filter",
+            "absolute_momentum_cash",
+            "absolute_momentum_lookback",
+            "absolute_momentum_threshold",
+            "target_volatility",
+            "volatility_lookback",
+            "trailing_stop_pct",
+        ):
+            params.pop(old_key, None)
 
-        if target_vol is not None:
-            params["target_volatility"] = target_vol
-        else:
-            params.pop("target_volatility", None)
-
-        if trailing_stop is not None:
-            params["trailing_stop_pct"] = trailing_stop
-        else:
-            params.pop("trailing_stop_pct", None)
+        params["risk_control"] = _build_risk_control(
+            l1_ma_lb,
+            l1_dd,
+            l2_atr_mul,
+            l2_atr_lb,
+            l3_target_vol,
+            l3_vol_lb,
+            l3_comfort,
+            l3_caution,
+            l3_scale,
+        )
 
         strategy.params = params
 
@@ -164,10 +231,15 @@ def sweep_risk_params(
             results.append(
                 SweepResult(
                     lookback=lookback,
-                    abs_momentum_lookback=abs_lb,
-                    vol_lookback=vol_lb,
-                    target_vol=target_vol,
-                    trailing_stop=trailing_stop,
+                    l1_ma_lookback=l1_ma_lb,
+                    l1_drawdown_threshold=l1_dd,
+                    l2_atr_multiplier=l2_atr_mul,
+                    l2_atr_lookback=l2_atr_lb,
+                    l3_target_vol=l3_target_vol,
+                    l3_vol_lookback=l3_vol_lb,
+                    l3_comfort_zone=l3_comfort,
+                    l3_caution_zone=l3_caution,
+                    l3_caution_scale=l3_scale,
                     total_return=total_return,
                     cagr=cagr,
                     max_drawdown=max_dd,
@@ -178,8 +250,10 @@ def sweep_risk_params(
             )
         except Exception as e:
             print(
-                f"  [跳过] lookback={lookback}, abs_lb={abs_lb}, vol_lb={vol_lb}, "
-                f"target_vol={target_vol}, trailing_stop={trailing_stop}: {e}"
+                f"  [跳过] lookback={lookback}, "
+                f"l1=({l1_ma_lb},{l1_dd:.2%}), "
+                f"l2=({l2_atr_mul},{l2_atr_lb}), "
+                f"l3=({l3_target_vol:.2%},{l3_vol_lb},{l3_comfort:.2%},{l3_caution:.2%},{l3_scale}): {e}"
             )
 
     strategy.params = base_params
@@ -195,29 +269,38 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
         "sharpe": lambda r: r.sharpe,
     }.get(sort_by, lambda r: r.cagr)
 
+    # 年化收益率默认倒序；最大回撤越小越好，所以升序
     sorted_results = sorted(results, key=sort_key, reverse=(sort_by != "max_dd"))
 
-    # 定义列宽（显示宽度，中文按2计）
     col_widths = {
         "lookback": 10,
-        "abs_lb": 8,
-        "vol_lb": 8,
-        "target_vol": 12,
-        "stop": 10,
-        "总收益": 12,
-        "CAGR": 12,
-        "最大回撤": 12,
-        "夏普": 10,
-        "最终净值": 12,
+        "l1_ma": 8,
+        "l1_dd": 8,
+        "l2_mul": 8,
+        "l2_lb": 8,
+        "l3_vol": 8,
+        "l3_lb": 8,
+        "l3_com": 8,
+        "l3_cau": 8,
+        "l3_scl": 8,
+        "总收益": 10,
+        "CAGR": 10,
+        "最大回撤": 10,
+        "夏普": 8,
+        "最终净值": 10,
     }
 
-    # 构建表头
     headers = [
         _rjust("lookback", col_widths["lookback"]),
-        _rjust("abs_lb", col_widths["abs_lb"]),
-        _rjust("vol_lb", col_widths["vol_lb"]),
-        _rjust("target_vol", col_widths["target_vol"]),
-        _rjust("stop", col_widths["stop"]),
+        _rjust("l1_ma", col_widths["l1_ma"]),
+        _rjust("l1_dd", col_widths["l1_dd"]),
+        _rjust("l2_mul", col_widths["l2_mul"]),
+        _rjust("l2_lb", col_widths["l2_lb"]),
+        _rjust("l3_vol", col_widths["l3_vol"]),
+        _rjust("l3_lb", col_widths["l3_lb"]),
+        _rjust("l3_com", col_widths["l3_com"]),
+        _rjust("l3_cau", col_widths["l3_cau"]),
+        _rjust("l3_scl", col_widths["l3_scl"]),
         _rjust("总收益", col_widths["总收益"]),
         _rjust("CAGR", col_widths["CAGR"]),
         _rjust("最大回撤", col_widths["最大回撤"]),
@@ -227,29 +310,27 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
 
     total_width = sum(col_widths.values()) + len(col_widths) - 1
     print("\n" + "=" * total_width)
+    print(f"按 {'CAGR' if sort_by == 'cagr' else sort_by} {'倒序' if sort_by != 'max_dd' else '升序'} 排列")
+    print("-" * total_width)
     print(" ".join(headers))
     print("-" * total_width)
     for r in sorted_results:
-        target_vol_str = f"{r.target_vol:.2%}" if r.target_vol is not None else "-"
-        stop_str = f"{r.trailing_stop:.2%}" if r.trailing_stop is not None else "-"
-        vol_lb_str = str(r.vol_lookback) if r.vol_lookback is not None else "-"
-        total_return_str = f"{r.total_return:+.2%}"
-        cagr_str = f"{r.cagr:+.2%}"
-        max_dd_str = f"{r.max_drawdown:+.2%}"
-        sharpe_str = f"{r.sharpe:.2f}"
-        final_nav_str = f"{r.final_nav:.4f}"
-
         row = [
             _rjust(str(r.lookback), col_widths["lookback"]),
-            _rjust(str(r.abs_momentum_lookback), col_widths["abs_lb"]),
-            _rjust(vol_lb_str, col_widths["vol_lb"]),
-            _rjust(target_vol_str, col_widths["target_vol"]),
-            _rjust(stop_str, col_widths["stop"]),
-            _rjust(total_return_str, col_widths["总收益"]),
-            _rjust(cagr_str, col_widths["CAGR"]),
-            _rjust(max_dd_str, col_widths["最大回撤"]),
-            _rjust(sharpe_str, col_widths["夏普"]),
-            _rjust(final_nav_str, col_widths["最终净值"]),
+            _rjust(str(r.l1_ma_lookback), col_widths["l1_ma"]),
+            _rjust(f"{r.l1_drawdown_threshold:.1%}", col_widths["l1_dd"]),
+            _rjust(f"{r.l2_atr_multiplier:.1f}", col_widths["l2_mul"]),
+            _rjust(str(r.l2_atr_lookback), col_widths["l2_lb"]),
+            _rjust(f"{r.l3_target_vol:.1%}", col_widths["l3_vol"]),
+            _rjust(str(r.l3_vol_lookback), col_widths["l3_lb"]),
+            _rjust(f"{r.l3_comfort_zone:.1%}", col_widths["l3_com"]),
+            _rjust(f"{r.l3_caution_zone:.1%}", col_widths["l3_cau"]),
+            _rjust(f"{r.l3_caution_scale:.1f}", col_widths["l3_scl"]),
+            _rjust(f"{r.total_return:+.2%}", col_widths["总收益"]),
+            _rjust(f"{r.cagr:+.2%}", col_widths["CAGR"]),
+            _rjust(f"{r.max_drawdown:+.2%}", col_widths["最大回撤"]),
+            _rjust(f"{r.sharpe:.2f}", col_widths["夏普"]),
+            _rjust(f"{r.final_nav:.4f}", col_widths["最终净值"]),
         ]
         print(" ".join(row))
     print("=" * total_width)
@@ -261,10 +342,15 @@ def save_results_csv(results: list[SweepResult], path: str) -> None:
         [
             {
                 "lookback": r.lookback,
-                "absolute_momentum_lookback": r.abs_momentum_lookback,
-                "volatility_lookback": r.vol_lookback,
-                "target_volatility": r.target_vol,
-                "trailing_stop_pct": r.trailing_stop,
+                "l1_ma_lookback": r.l1_ma_lookback,
+                "l1_drawdown_threshold": r.l1_drawdown_threshold,
+                "l2_atr_multiplier": r.l2_atr_multiplier,
+                "l2_atr_lookback": r.l2_atr_lookback,
+                "l3_target_vol": r.l3_target_vol,
+                "l3_vol_lookback": r.l3_vol_lookback,
+                "l3_comfort_zone": r.l3_comfort_zone,
+                "l3_caution_zone": r.l3_caution_zone,
+                "l3_caution_scale": r.l3_caution_scale,
                 "total_return": r.total_return,
                 "cagr": r.cagr,
                 "max_drawdown": r.max_drawdown,
@@ -280,32 +366,57 @@ def save_results_csv(results: list[SweepResult], path: str) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="风控参数网格扫描")
+    parser = argparse.ArgumentParser(description="三层风控参数网格扫描")
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
     parser.add_argument(
         "--lookbacks",
         default="22",
-        help="lookback 列表，逗号分隔",
+        help="策略 lookback 列表，逗号分隔",
     )
     parser.add_argument(
-        "--abs-lookbacks",
-        default="9",
-        help="absolute_momentum_lookback 列表，逗号分隔",
+        "--l1-ma-lookbacks",
+        default="10",
+        help="Layer1 均线回望周期列表，逗号分隔",
     )
     parser.add_argument(
-        "--vol-lookbacks",
-        default="26",
-        help="volatility_lookback 列表，逗号分隔，none 表示用默认值",
+        "--l1-drawdown-thresholds",
+        default="0.41",
+        help="Layer1 回撤阈值列表，逗号分隔",
     )
     parser.add_argument(
-        "--target-vols",
-        default="0.07,0.08,0.09,0.1",
-        help="target_volatility 列表，逗号分隔，none 表示不启用",
+        "--l2-atr-multipliers",
+        default="3.0",
+        help="Layer2 ATR 乘数列表，逗号分隔",
     )
     parser.add_argument(
-        "--trailing-stops",
-        default="0.07",
-        help="trailing_stop_pct 列表，逗号分隔，none 表示不启用",
+        "--l2-atr-lookbacks",
+        default="14",
+        help="Layer2 ATR 回望周期列表，逗号分隔",
+    )
+    parser.add_argument(
+        "--l3-target-vols",
+        default="0.25",
+        help="Layer3 目标波动率列表，逗号分隔",
+    )
+    parser.add_argument(
+        "--l3-vol-lookbacks",
+        default="23",
+        help="Layer3 波动率回望周期列表，逗号分隔",
+    )
+    parser.add_argument(
+        "--l3-comfort-zones",
+        default="0.15",
+        help="Layer3 舒适区波动率上限列表，逗号分隔",
+    )
+    parser.add_argument(
+        "--l3-caution-zones",
+        default="0.27",
+        help="Layer3 警惕区波动率上限列表，逗号分隔",
+    )
+    parser.add_argument(
+        "--l3-caution-scales",
+        default="0.4",
+        help="Layer3 警惕区仓位系数列表，逗号分隔",
     )
     parser.add_argument(
         "--output",
@@ -316,7 +427,7 @@ def main():
         "--sort-by",
         default="cagr",
         choices=["total", "cagr", "max_dd", "sharpe"],
-        help="结果排序依据",
+        help="结果排序依据，默认 CAGR 倒序",
     )
     parser.add_argument(
         "--today",
@@ -337,18 +448,41 @@ def main():
         return
 
     lookbacks = _parse_int_list(args.lookbacks)
-    abs_lookbacks = _parse_int_list(args.abs_lookbacks)
-    vol_lookbacks = _parse_optional_int_list(args.vol_lookbacks)
-    target_vols = _parse_float_list(args.target_vols)
-    trailing_stops = _parse_float_list(args.trailing_stops)
+    l1_ma_lookbacks = _parse_int_list(args.l1_ma_lookbacks)
+    l1_drawdown_thresholds = _parse_float_list(args.l1_drawdown_thresholds)
+    l2_atr_multipliers = _parse_float_list(args.l2_atr_multipliers)
+    l2_atr_lookbacks = _parse_int_list(args.l2_atr_lookbacks)
+    l3_target_vols = _parse_float_list(args.l3_target_vols)
+    l3_vol_lookbacks = _parse_int_list(args.l3_vol_lookbacks)
+    l3_comfort_zones = _parse_float_list(args.l3_comfort_zones)
+    l3_caution_zones = _parse_float_list(args.l3_caution_zones)
+    l3_caution_scales = _parse_float_list(args.l3_caution_scales)
 
+    total_combos = (
+        len(lookbacks)
+        * len(l1_ma_lookbacks)
+        * len(l1_drawdown_thresholds)
+        * len(l2_atr_multipliers)
+        * len(l2_atr_lookbacks)
+        * len(l3_target_vols)
+        * len(l3_vol_lookbacks)
+        * len(l3_comfort_zones)
+        * len(l3_caution_zones)
+        * len(l3_caution_scales)
+    )
     print(
         f"\n策略: {strategy.name}"
         f"\nlookback: {lookbacks}"
-        f"\nabsolute_momentum_lookback: {abs_lookbacks}"
-        f"\nvolatility_lookback: {vol_lookbacks}"
-        f"\ntarget_volatility: {target_vols}"
-        f"\ntrailing_stop_pct: {trailing_stops}\n"
+        f"\nLayer1 ma_lookback: {l1_ma_lookbacks}"
+        f"\nLayer1 drawdown_threshold: {l1_drawdown_thresholds}"
+        f"\nLayer2 atr_multiplier: {l2_atr_multipliers}"
+        f"\nLayer2 atr_lookback: {l2_atr_lookbacks}"
+        f"\nLayer3 target_vol: {l3_target_vols}"
+        f"\nLayer3 vol_lookback: {l3_vol_lookbacks}"
+        f"\nLayer3 comfort_zone: {l3_comfort_zones}"
+        f"\nLayer3 caution_zone: {l3_caution_zones}"
+        f"\nLayer3 caution_scale: {l3_caution_scales}"
+        f"\n总组合数: {total_combos}\n"
     )
 
     cache_dir = app_config.backtest.cache_dir
@@ -373,10 +507,15 @@ def main():
         app_config=app_config,
         data_source=data_source,
         lookbacks=lookbacks,
-        abs_lookbacks=abs_lookbacks,
-        vol_lookbacks=vol_lookbacks,
-        target_vols=target_vols,
-        trailing_stops=trailing_stops,
+        l1_ma_lookbacks=l1_ma_lookbacks,
+        l1_drawdown_thresholds=l1_drawdown_thresholds,
+        l2_atr_multipliers=l2_atr_multipliers,
+        l2_atr_lookbacks=l2_atr_lookbacks,
+        l3_target_vols=l3_target_vols,
+        l3_vol_lookbacks=l3_vol_lookbacks,
+        l3_comfort_zones=l3_comfort_zones,
+        l3_caution_zones=l3_caution_zones,
+        l3_caution_scales=l3_caution_scales,
         data=data,
     )
 

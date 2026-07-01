@@ -204,12 +204,14 @@ def fetch_pool_data(
     data_low = pd.DataFrame(all_low)
 
     latest_etf_start = max(actual_starts.values())
+    earliest_etf_start = min(actual_starts.values())
 
-    # 策略实际起始日 = max(配置起始日, 所有 ETF 中最晚的数据起始日)
-    # dynamic_pool 模式下，允许 ETF 分批就绪，不再用预热窗口截断起始日。
+    # 策略实际起始日：
+    # - 默认模式下，需要等所有 ETF 都到齐且完成预热，因此取最晚的数据起始日/预热完成日。
+    # - dynamic_pool 模式下，允许 ETF 分批就绪，整体回测从最早有数据的 ETF 开始。
     dynamic_pool = strategy.params.get("dynamic_pool", False)
     if dynamic_pool:
-        effective_start = max(target_start_dt, latest_etf_start)
+        effective_start = max(target_start_dt, earliest_etf_start)
     else:
         # 非 dynamic_pool 模式保持原行为：等所有 ETF 都能产生有效得分再开始
         # 不同 type 的 ETF 需要不同长度的历史数据才能计算出第一个有效得分，

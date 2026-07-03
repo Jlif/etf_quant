@@ -74,11 +74,11 @@ strategies:
     enabled: true
     mode: rotation
     pool:
-      - { code: "512040", name: "价值100ETF富国", type: "价值" }
-      - { code: "515180", name: "红利ETF易方达", type: "红利" }
+      - { code: "510300", name: "沪深300ETF", type: "宽基" }
+      # - { code: "512040", name: "价值100ETF富国", type: "价值" }
+      # - { code: "515180", name: "红利ETF易方达", type: "红利" }
       - { code: "159915", name: "创业板ETF", type: "成长" }
       - { code: "511260", name: "10年国债ETF国泰", type: "" }
-      - { code: "510300", name: "沪深300ETF", type: "宽基" }
       - { code: "513500", name: "标普500ETF博时", type: "宽基" }
       - { code: "518880", name: "黄金ETF", type: "商品" }
       - { code: "588080", name: "科创50ETF易方达", type: "成长" }
@@ -92,14 +92,14 @@ strategies:
       scoring: momentum
       adaptive_scoring: false
       benchmark: "沪深300ETF"
-      top_n: 1
+      top_n: 2
       dynamic_pool: true       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
       safe_haven: "10年国债ETF国泰"
       risk_control:
         layer1:
           enabled: true
           ma_lookback: 20
-          drawdown_lookback: 5
+          drawdown_lookback: 20
           drawdown_threshold: 0.15
         layer2:
           enabled: true
@@ -110,6 +110,6 @@ strategies:
           target_vol: 0.15
           vol_lookback: 23
           comfort_zone: 0.15
+          caution_scale: 0.5
           caution_zone: 0.27
-          caution_scale: 0.4
       rebalance_buffer: 0.2

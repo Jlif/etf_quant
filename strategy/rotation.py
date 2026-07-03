@@ -311,6 +311,10 @@ def run(
     for name in name_list:
         df[f"权重_{name}"] = df[f"权重_{name}"].shift(1).fillna(0.0)
 
+    # 风控原因也随持仓前移1天，使其与风控实际生效当日的持仓对齐，
+    # 避免“当天显示触发止损但当天持仓仍是旧仓位”的误解。
+    df["风控原因"] = df["风控原因"].shift(1).fillna("")
+
     # 权重为 0 时，该 ETF 的收益贡献应为 0；把收益列中的 NaN 填 0
     # 避免 0 * NaN = NaN 污染策略日收益率。
     for name in name_list:

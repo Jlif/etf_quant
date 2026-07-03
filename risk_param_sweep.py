@@ -75,6 +75,7 @@ class SweepResult:
     l3_comfort_zone: float
     l3_caution_zone: float
     l3_caution_scale: float
+    l3_transition_power: float | None
     total_return: float
     cagr: float
     max_drawdown: float
@@ -89,6 +90,18 @@ def _parse_float_list(s: str) -> list[float]:
 
 def _parse_int_list(s: str) -> list[int]:
     return [int(x.strip()) for x in s.split(",") if x.strip()]
+
+
+def _parse_optional_float_list(s: str) -> list[float | None]:
+    """解析可能包含 None 的浮点数列表，'none' 或空字符串表示 None。"""
+    result: list[float | None] = []
+    for part in s.split(","):
+        part = part.strip().lower()
+        if not part or part == "none" or part == "null":
+            result.append(None)
+        else:
+            result.append(float(part))
+    return result
 
 
 def _compute_sharpe(nav: pd.Series) -> float:
@@ -109,8 +122,19 @@ def _build_risk_control(
     l3_comfort_zone: float,
     l3_caution_zone: float,
     l3_caution_scale: float,
+    l3_transition_power: float | None,
 ) -> dict:
     """构造新的 risk_control 参数字典。"""
+    layer3 = {
+        "enabled": True,
+        "target_vol": l3_target_vol,
+        "vol_lookback": l3_vol_lookback,
+        "comfort_zone": l3_comfort_zone,
+        "caution_zone": l3_caution_zone,
+        "caution_scale": l3_caution_scale,
+    }
+    if l3_transition_power is not None:
+        layer3["transition_power"] = l3_transition_power
     return {
         "layer1": {
             "enabled": True,
@@ -122,14 +146,7 @@ def _build_risk_control(
             "atr_multiplier": l2_atr_multiplier,
             "atr_lookback": l2_atr_lookback,
         },
-        "layer3": {
-            "enabled": True,
-            "target_vol": l3_target_vol,
-            "vol_lookback": l3_vol_lookback,
-            "comfort_zone": l3_comfort_zone,
-            "caution_zone": l3_caution_zone,
-            "caution_scale": l3_caution_scale,
-        },
+        "layer3": layer3,
     }
 
 
@@ -147,6 +164,7 @@ def sweep_risk_params(
     l3_comfort_zones: list[float],
     l3_caution_zones: list[float],
     l3_caution_scales: list[float],
+    l3_transition_powers: list[float | None],
     data: dict | None = None,
 ) -> list[SweepResult]:
     """对多组三层风控参数做网格扫描。"""
@@ -164,6 +182,7 @@ def sweep_risk_params(
         * len(l3_comfort_zones)
         * len(l3_caution_zones)
         * len(l3_caution_scales)
+        * len(l3_transition_powers)
     )
     print(f"总共 {total_combos} 种参数组合\n")
 
@@ -178,6 +197,7 @@ def sweep_risk_params(
         l3_comfort_zones,
         l3_caution_zones,
         l3_caution_scales,
+        l3_transition_powers,
     )
 
     for (
@@ -191,6 +211,7 @@ def sweep_risk_params(
         l3_comfort,
         l3_caution,
         l3_scale,
+        l3_power,
     ) in combos:
         params = {**base_params}
         params["lookback"] = lookback
@@ -217,6 +238,7 @@ def sweep_risk_params(
             l3_comfort,
             l3_caution,
             l3_scale,
+            l3_power,
         )
 
         strategy.params = params
@@ -240,6 +262,7 @@ def sweep_risk_params(
                     l3_comfort_zone=l3_comfort,
                     l3_caution_zone=l3_caution,
                     l3_caution_scale=l3_scale,
+                    l3_transition_power=l3_power,
                     total_return=total_return,
                     cagr=cagr,
                     max_drawdown=max_dd,
@@ -249,11 +272,12 @@ def sweep_risk_params(
                 )
             )
         except Exception as e:
+            power_str = "None" if l3_power is None else f"{l3_power:.1f}"
             print(
                 f"  [跳过] lookback={lookback}, "
                 f"l1=({l1_ma_lb},{l1_dd:.2%}), "
                 f"l2=({l2_atr_mul},{l2_atr_lb}), "
-                f"l3=({l3_target_vol:.2%},{l3_vol_lb},{l3_comfort:.2%},{l3_caution:.2%},{l3_scale}): {e}"
+                f"l3=({l3_target_vol:.2%},{l3_vol_lb},{l3_comfort:.2%},{l3_caution:.2%},{l3_scale},power={power_str}): {e}"
             )
 
     strategy.params = base_params
@@ -283,6 +307,7 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
         "l3_com": 8,
         "l3_cau": 8,
         "l3_scl": 8,
+        "l3_pwr": 8,
         "总收益": 10,
         "CAGR": 10,
         "最大回撤": 10,
@@ -301,6 +326,7 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
         _rjust("l3_com", col_widths["l3_com"]),
         _rjust("l3_cau", col_widths["l3_cau"]),
         _rjust("l3_scl", col_widths["l3_scl"]),
+        _rjust("l3_pwr", col_widths["l3_pwr"]),
         _rjust("总收益", col_widths["总收益"]),
         _rjust("CAGR", col_widths["CAGR"]),
         _rjust("最大回撤", col_widths["最大回撤"]),
@@ -326,6 +352,7 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
             _rjust(f"{r.l3_comfort_zone:.1%}", col_widths["l3_com"]),
             _rjust(f"{r.l3_caution_zone:.1%}", col_widths["l3_cau"]),
             _rjust(f"{r.l3_caution_scale:.1f}", col_widths["l3_scl"]),
+            _rjust("None" if r.l3_transition_power is None else f"{r.l3_transition_power:.1f}", col_widths["l3_pwr"]),
             _rjust(f"{r.total_return:+.2%}", col_widths["总收益"]),
             _rjust(f"{r.cagr:+.2%}", col_widths["CAGR"]),
             _rjust(f"{r.max_drawdown:+.2%}", col_widths["最大回撤"]),
@@ -351,6 +378,7 @@ def save_results_csv(results: list[SweepResult], path: str) -> None:
                 "l3_comfort_zone": r.l3_comfort_zone,
                 "l3_caution_zone": r.l3_caution_zone,
                 "l3_caution_scale": r.l3_caution_scale,
+                "l3_transition_power": r.l3_transition_power,
                 "total_return": r.total_return,
                 "cagr": r.cagr,
                 "max_drawdown": r.max_drawdown,
@@ -395,28 +423,33 @@ def main():
     )
     parser.add_argument(
         "--l3-target-vols",
-        default="0.25",
+        default="0.36",
         help="Layer3 目标波动率列表，逗号分隔",
     )
     parser.add_argument(
         "--l3-vol-lookbacks",
-        default="23",
+        default="16",
         help="Layer3 波动率回望周期列表，逗号分隔",
     )
     parser.add_argument(
         "--l3-comfort-zones",
-        default="0.15",
+        default="0.27",
         help="Layer3 舒适区波动率上限列表，逗号分隔",
     )
     parser.add_argument(
         "--l3-caution-zones",
-        default="0.27",
+        default="0.4",
         help="Layer3 警惕区波动率上限列表，逗号分隔",
     )
     parser.add_argument(
         "--l3-caution-scales",
-        default="0.4",
-        help="Layer3 警惕区仓位系数列表，逗号分隔",
+        default="0.5",
+        help="Layer3 警惕区仓位系数列表，逗号分隔（transition_power 非 None 时被忽略）",
+    )
+    parser.add_argument(
+        "--l3-transition-powers",
+        default="3.0",
+        help="Layer3 平滑过渡幂指数列表，逗号分隔；'none' 表示不使用平滑过渡",
     )
     parser.add_argument(
         "--output",
@@ -457,6 +490,7 @@ def main():
     l3_comfort_zones = _parse_float_list(args.l3_comfort_zones)
     l3_caution_zones = _parse_float_list(args.l3_caution_zones)
     l3_caution_scales = _parse_float_list(args.l3_caution_scales)
+    l3_transition_powers = _parse_optional_float_list(args.l3_transition_powers)
 
     total_combos = (
         len(lookbacks)
@@ -469,6 +503,7 @@ def main():
         * len(l3_comfort_zones)
         * len(l3_caution_zones)
         * len(l3_caution_scales)
+        * len(l3_transition_powers)
     )
     print(
         f"\n策略: {strategy.name}"
@@ -482,6 +517,7 @@ def main():
         f"\nLayer3 comfort_zone: {l3_comfort_zones}"
         f"\nLayer3 caution_zone: {l3_caution_zones}"
         f"\nLayer3 caution_scale: {l3_caution_scales}"
+        f"\nLayer3 transition_power: {l3_transition_powers}"
         f"\n总组合数: {total_combos}\n"
     )
 
@@ -516,6 +552,7 @@ def main():
         l3_comfort_zones=l3_comfort_zones,
         l3_caution_zones=l3_caution_zones,
         l3_caution_scales=l3_caution_scales,
+        l3_transition_powers=l3_transition_powers,
         data=data,
     )
 

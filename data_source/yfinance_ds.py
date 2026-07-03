@@ -12,10 +12,10 @@ class YFinanceDataSource(BaseDataSource):
 
     name = "yfinance"
 
-    _SZ_CODES = {"159915"}
-
     def _ticker(self, code: str) -> str:
-        suffix = ".SZ" if code in self._SZ_CODES else ".SS"
+        # A 股代码以 0/1/2/3 开头多为深交所，其余（5/6/9 等）多为上交所
+        first = code[0] if code else ""
+        suffix = ".SZ" if first in ("0", "1", "2", "3") else ".SS"
         return code + suffix
 
     def fetch(self, code: str, start: str, end: str | None = None) -> pd.DataFrame:

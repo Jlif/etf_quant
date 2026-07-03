@@ -272,6 +272,7 @@ def run(
         comfort_zone = layer3.get("comfort_zone", 0.15)
         caution_zone = layer3.get("caution_zone", 0.25)
         caution_scale = layer3.get("caution_scale", 0.5)
+        transition_power = layer3.get("transition_power")
 
         weight_cols = [f"权重_{n}" for n in name_list]
         weights_df = df[weight_cols].copy()
@@ -285,6 +286,7 @@ def run(
             caution_zone=caution_zone,
             caution_scale=caution_scale,
             safe_haven=safe_haven,
+            transition_power=transition_power,
         )
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
@@ -302,10 +304,16 @@ def run(
 
         caution = (pre_risk_weight > post_risk_weight) & (post_risk_weight > 0)
         if caution.any():
-            df.loc[caution, "风控原因"] += (
-                f"Layer3: 波动率警惕(组合波动{comfort_zone:.1%}~{caution_zone:.1%})，"
-                f"仓位压缩为{caution_scale:.0%}; "
-            )
+            if transition_power is not None:
+                df.loc[caution, "风控原因"] += (
+                    f"Layer3: 波动率警惕(组合波动{comfort_zone:.1%}~{caution_zone:.1%})，"
+                    f"仓位平滑压缩(power={transition_power}); "
+                )
+            else:
+                df.loc[caution, "风控原因"] += (
+                    f"Layer3: 波动率警惕(组合波动{comfort_zone:.1%}~{caution_zone:.1%})，"
+                    f"仓位压缩为{caution_scale:.0%}; "
+                )
 
     # 4. 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
     for name in name_list:

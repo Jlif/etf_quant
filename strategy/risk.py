@@ -387,13 +387,17 @@ def layer3_vol_target_filter(
     caution_zone: float,
     caution_scale: float,
     safe_haven: str | None,
+    transition_power: float | None = None,
 ) -> pd.DataFrame:
     """
-    第三层：目标波动率平准（非线性）。
+    第三层：目标波动率平准（非线性/平滑）。
 
     计算组合 EWMA 年化波动率，按分段函数缩放风险资产仓位：
     - 波动率 < comfort_zone：线性缩放（target_vol / realized_vol），上限 1.0
-    - comfort_zone <= 波动率 < caution_zone：线性结果 * caution_scale
+    - comfort_zone <= 波动率 < caution_zone：
+        - 若 transition_power 为 None：线性结果 * caution_scale（旧三段式）
+        - 若 transition_power 不为 None：使用幂函数平滑过渡，
+          波动率越接近 caution_zone，仓位下降越快
     - 波动率 >= caution_zone：强制清零
 
     Parameters
@@ -411,9 +415,12 @@ def layer3_vol_target_filter(
     caution_zone : float
         警惕区波动率上限。
     caution_scale : float
-        警惕区仓位缩放系数。
+        警惕区仓位缩放系数（仅在 transition_power 为 None 时生效）。
     safe_haven : str | None
         减仓后承接资金的去向。若为 None 则空仓。
+    transition_power : float | None
+        平滑过渡曲线的幂指数。大于 1 时波动率越高压降越快；
+        为 None 时退化为旧版三段式。建议 2.0~4.0。
 
     Returns
     -------
@@ -443,7 +450,15 @@ def layer3_vol_target_filter(
     mask_panic = ewma_vol >= caution_zone
 
     scale[mask_comfort] = linear_scale[mask_comfort]
-    scale[mask_caution] = linear_scale[mask_caution] * caution_scale
+
+    if transition_power is not None:
+        # 平滑幂函数过渡：x=0 时 factor=1，x=1 时 factor=0
+        x = ((ewma_vol - comfort_zone) / (caution_zone - comfort_zone)).clip(lower=0.0, upper=1.0)
+        smooth_factor = 1.0 - x ** transition_power
+        scale[mask_caution] = linear_scale[mask_caution] * smooth_factor[mask_caution]
+    else:
+        scale[mask_caution] = linear_scale[mask_caution] * caution_scale
+
     scale[mask_panic] = 0.0
     scale = scale.fillna(1.0)
 

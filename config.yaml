@@ -88,7 +88,7 @@ strategies:
       # - { code: "159361", name: "A500ETF易方达", type: "宽基" }
       # - { code: "159201", name: "自由现金流ETF华夏", type: "自由现金流" }
     params:
-      lookback: 22
+      lookback: 20
       scoring: momentum
       adaptive_scoring: false
       benchmark: "沪深300ETF"
@@ -99,18 +99,18 @@ strategies:
         layer1:
           enabled: true
           ma_lookback: 20
-          drawdown_lookback: 20
+          drawdown_lookback: 11
           drawdown_threshold: 0.15
         layer2:
           enabled: true
           atr_multiplier: 3.0
-          atr_lookback: 14
+          atr_lookback: 16
         layer3:
           enabled: true
-          target_vol: 0.15
-          vol_lookback: 23
-          comfort_zone: 0.15
-          caution_zone: 0.41
+          target_vol: 0.36
+          vol_lookback: 16
+          comfort_zone: 0.27
+          caution_zone: 0.4
           # 旧三段式参数：未配置 transition_power 时生效
           # caution_scale: 0.5
           # 平滑过渡参数：越大则波动率越接近 caution_zone 时仓位下降越快，建议 2.0~4.0

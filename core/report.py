@@ -144,7 +144,7 @@ def performance_report(
     returns: pd.Series,
     benchmark: pd.Series | None = None,
     title: str = "策略回测报告",
-    rebalance_df: pd.DataFrame | None = None,
+    holding_df: pd.DataFrame | None = None,
 ) -> str:
     """输出 quantstats 回测报告并保存 HTML 到 output 目录（不自动打开浏览器）
 
@@ -174,11 +174,11 @@ def performance_report(
             html_content = f.read()
         html_content = _translate_html_metrics(html_content)
 
-        # 在 HTML 末尾追加换仓记录表格
-        if rebalance_df is not None and not rebalance_df.empty:
-            rebalance_html = _build_rebalance_html(rebalance_df)
-            # 在 </body> 前插入换仓记录
-            html_content = html_content.replace("</body>", f"{rebalance_html}\n</body>")
+        # 在 HTML 末尾追加每日持仓记录表格
+        if holding_df is not None and not holding_df.empty:
+            holding_html = _build_holding_html(holding_df)
+            # 在 </body> 前插入持仓记录
+            html_content = html_content.replace("</body>", f"{holding_html}\n</body>")
 
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(html_content)
@@ -188,25 +188,10 @@ def performance_report(
     return filepath
 
 
-def _build_rebalance_html(rebalance_df: pd.DataFrame) -> str:
-    """将换仓记录 DataFrame 转为 HTML 片段。"""
-    df = rebalance_df.copy()
+def _build_holding_html(holding_df: pd.DataFrame) -> str:
+    """将每日持仓记录 DataFrame 转为 HTML 片段。"""
+    df = holding_df.copy()
     df.index = pd.to_datetime(df.index).strftime("%Y-%m-%d")
-
-    # 重命名列，使其更易读
-    column_mapping = {
-        "持仓": "新持仓",
-        "调出": "调出标的",
-        "调入": "调入标的",
-        "换仓前净值": "换仓前净值",
-        "换仓后净值": "换仓后净值",
-    }
-    df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-
-    # 净值保留 4 位小数
-    for col in ["换仓前净值", "换仓后净值"]:
-        if col in df.columns:
-            df[col] = df[col].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "-")
 
     html = df.to_html(
         classes="table table-striped table-hover",
@@ -217,8 +202,8 @@ def _build_rebalance_html(rebalance_df: pd.DataFrame) -> str:
 
     return f"""
 <div style="max-width: 1200px; margin: 40px auto; padding: 0 20px;">
-  <h2 style="color: #333; border-bottom: 2px solid #FF8124; padding-bottom: 10px;">换仓记录</h2>
-  <p style="color: #666;">共 {len(df)} 次换仓</p>
+  <h2 style="color: #333; border-bottom: 2px solid #FF8124; padding-bottom: 10px;">持仓记录</h2>
+  <p style="color: #666;">共 {len(df)} 个交易日</p>
   {html}
 </div>
 <style>

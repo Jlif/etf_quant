@@ -198,20 +198,15 @@ def run(
     # 3.05–3.7 三层风控系统
     risk_control = params.get("risk_control", {})
 
-    # 3.05 第一层：时序动量过滤
+    # 3.05 第一层：组合趋势/回撤过滤
     layer1 = risk_control.get("layer1", {})
     if layer1.get("enabled", False):
         safe_haven = params.get("safe_haven")
         if not safe_haven:
             raise ValueError("开启 risk_control.layer1 时必须配置 safe_haven")
-        benchmark_name = params.get("benchmark")
-        benchmark_series = (
-            close_df[benchmark_name]
-            if benchmark_name and benchmark_name in close_df.columns
-            else None
-        )
         ma_lookback = layer1.get("ma_lookback", 20)
         drawdown_threshold = layer1.get("drawdown_threshold", 0.05)
+        drawdown_lookback = layer1.get("drawdown_lookback", 252)
 
         weight_cols = [f"权重_{n}" for n in name_list]
         weights_df = df[weight_cols].copy()
@@ -219,10 +214,10 @@ def run(
         adjusted_weights = layer1_market_filter(
             weights_df=weights_df,
             close_df=close_df,
-            benchmark_series=benchmark_series,
             ma_lookback=ma_lookback,
             drawdown_threshold=drawdown_threshold,
             safe_haven=safe_haven,
+            drawdown_lookback=drawdown_lookback,
         )
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
@@ -234,8 +229,8 @@ def run(
         )
         if triggered.any():
             df.loc[triggered, "风控原因"] += (
-                f"第一层: 时序动量过滤(跌破{ma_lookback}日均线或"
-                f"回撤>{drawdown_threshold:.1%}); "
+                f"第一层: 组合趋势/回撤过滤(跌破{ma_lookback}日均线或"
+                f"{drawdown_lookback}日高点回撤>{drawdown_threshold:.1%}); "
             )
 
     # 3.6 第二层：ATR 跟踪止损拦截
@@ -387,6 +382,9 @@ def run(
     # 记录每日主持仓信号（权重最大的那个）
     weight_cols = [f"权重_{n}" for n in name_list]
     df["信号"] = df[weight_cols].idxmax(axis=1).str.replace("权重_", "")
+
+    # 记录每日动量排名第一的 ETF（基于信号日得分）
+    df["当天动量第一"] = df[signal_cols].idxmax(axis=1).str.replace(prefix, "")
 
     # 记录每日完整持仓组合，并标记换仓日
     def _format_holding(row: pd.Series) -> str:

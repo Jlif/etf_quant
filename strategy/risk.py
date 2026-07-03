@@ -222,31 +222,32 @@ def trailing_stop_filter(
 def layer1_market_filter(
     weights_df: pd.DataFrame,
     close_df: pd.DataFrame,
-    benchmark_series: pd.Series | None,
     ma_lookback: int,
     drawdown_threshold: float,
     safe_haven: str,
+    drawdown_lookback: int = 252,
 ) -> pd.DataFrame:
     """
-    第一层：时序动量过滤。
+    第一层：组合趋势/回撤过滤。
 
-    当市场代理价格跌破 N 日均线，或从前期高点回撤超过阈值时，
-    强制清空所有风险资产仓位，全部转入 safe_haven。
+    用当前持仓权重合成组合净值序列，当组合净值跌破 N 日均线，
+    或从过去 M 日高点回撤超过阈值时，强制清空所有风险资产仓位，
+    全部转入 safe_haven。
 
     Parameters
     ----------
     weights_df : pd.DataFrame
         列名为 "权重_{标的名称}" 的每日权重表。
     close_df : pd.DataFrame
-        收盘价表，用于构建 pool 等权市场代理（benchmark 未配置时）。
-    benchmark_series : pd.Series | None
-        外部基准序列（如 params.benchmark 对应的收盘价）。若为空则使用 pool 等权价格。
+        收盘价表，列名为标的名称。
     ma_lookback : int
         均线回望周期。
     drawdown_threshold : float
-        回撤阈值，例如 0.05 表示回撤 5% 即触发。
+        回撤阈值，例如 0.10 表示从 M 日高点回撤 10% 即触发。
     safe_haven : str
         避风港标的名称。
+    drawdown_lookback : int, optional
+        计算回撤高点时使用的滚动窗口（交易日），默认 252。
 
     Returns
     -------
@@ -255,17 +256,21 @@ def layer1_market_filter(
     """
     adjusted = weights_df.copy()
     weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
+    name_list = [c.replace("权重_", "") for c in weight_cols]
 
-    if benchmark_series is not None:
-        market = benchmark_series.reindex(adjusted.index)
-    else:
-        market = close_df.mean(axis=1)
+    # 合成组合净值序列：用持仓权重计算组合日收益，再累积为净值
+    # weights_df 为信号日权重（T 日权重决定 T+1 日持仓），因此用 shift(1) 与 T 日收益对齐
+    returns = close_df.pct_change(fill_method=None)
+    portfolio_returns = pd.Series(0.0, index=adjusted.index)
+    for name in name_list:
+        portfolio_returns += weights_df[f"权重_{name}"].shift(1) * returns[name]
+    portfolio_value = (1.0 + portfolio_returns.fillna(0)).cumprod()
 
-    ma = market.rolling(ma_lookback).mean()
-    peak = market.expanding().max()
-    drawdown = (market - peak) / peak
+    ma = portfolio_value.rolling(ma_lookback).mean()
+    peak = portfolio_value.rolling(drawdown_lookback, min_periods=1).max()
+    drawdown = (portfolio_value - peak) / peak
 
-    triggered = (market < ma) | (drawdown < -drawdown_threshold)
+    triggered = (portfolio_value < ma) | (drawdown < -drawdown_threshold)
     if not triggered.any():
         return adjusted
 

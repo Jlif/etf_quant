@@ -334,16 +334,16 @@ def run_strategy(
     strategy_returns = result["轮动策略净值"].pct_change().fillna(0)
     strategy_returns.name = "轮动策略净值"
 
-    # 提前构建换仓记录，供 HTML 报告和 CSV 使用
-    rebalance_df = None
-    if strategy.mode == "rotation" and "换仓" in result.columns:
-        rebalance_df = _build_rebalance_df(result)
+    # 提前构建每日持仓记录，供 HTML 报告和 CSV 使用
+    holding_df = None
+    if strategy.mode == "rotation" and "持仓" in result.columns:
+        holding_df = _build_holding_df(result)
 
     performance_report(
         strategy_returns,
         benchmark=benchmark_returns,
         title=f"{strategy.name}回测报告",
-        rebalance_df=rebalance_df,
+        holding_df=holding_df,
     )
 
     # 输出最新交易信号（用于实盘调仓）
@@ -353,58 +353,48 @@ def run_strategy(
     if strategy.mode == "rotation":
         print_position_contribution(strategy, result, name_list)
 
-    # 输出轮动策略换仓记录 CSV
-    if strategy.mode == "rotation" and "换仓" in result.columns:
-        if rebalance_df is not None and not rebalance_df.empty:
+    # 输出轮动策略每日持仓记录 CSV
+    if strategy.mode == "rotation" and "持仓" in result.columns:
+        if holding_df is not None and not holding_df.empty:
             safe_name = strategy.name.replace(" ", "_").replace(":", "_")
-            csv_path = os.path.join(OUTPUT_DIR, f"{safe_name}_换仓记录.csv")
-            rebalance_df.to_csv(csv_path, encoding="utf-8-sig")
-            print(f"[换仓记录已保存] {csv_path}")
+            csv_path = os.path.join(OUTPUT_DIR, f"{safe_name}_持仓记录.csv")
+            holding_df.to_csv(csv_path, encoding="utf-8-sig")
+            print(f"[持仓记录已保存] {csv_path}")
+            _print_holding_summary(holding_df, strategy.name)
 
     return result, name_list
 
 
-def _build_rebalance_df(result: pd.DataFrame) -> pd.DataFrame | None:
-    """从 rotation 策略结果中提取换仓记录 DataFrame。"""
-    if "换仓" not in result.columns or "持仓" not in result.columns:
+def _build_holding_df(result: pd.DataFrame) -> pd.DataFrame | None:
+    """从 rotation 策略结果中提取每日持仓记录 DataFrame。"""
+    if "持仓" not in result.columns:
         return None
 
-    changes = result[result["换仓"]].copy()
-    if changes.empty:
-        return None
+    cols = ["持仓", "当天动量第一", "风控原因"]
+    if "轮动策略净值" in result.columns:
+        cols.append("轮动策略净值")
+    if "轮动策略日收益率" in result.columns:
+        cols.append("轮动策略日收益率")
 
-    def _parse_holding_names(holding_str: str) -> set[str]:
-        return {
-            part.split("(")[0].strip()
-            for part in str(holding_str).split("+")
-            if part.strip()
-        }
+    holding_df = result[cols].copy()
+    holding_df.index.name = "日期"
 
-    prev_holdings = result["持仓"].shift(1)
-    changes["调出"] = [
-        "、".join(sorted(_parse_holding_names(prev) - _parse_holding_names(cur)))
-        for prev, cur in zip(prev_holdings.loc[changes.index], changes["持仓"])
-    ]
-    changes["调入"] = [
-        "、".join(sorted(_parse_holding_names(cur) - _parse_holding_names(prev)))
-        for prev, cur in zip(prev_holdings.loc[changes.index], changes["持仓"])
-    ]
+    # 格式化收益率
+    if "轮动策略日收益率" in holding_df.columns:
+        holding_df["轮动策略日收益率"] = holding_df["轮动策略日收益率"].apply(
+            lambda x: f"{x:+.2%}"
+        )
 
-    nav_col = "轮动策略净值"
-    start_nav = result[nav_col].iloc[0] if not result[nav_col].empty else 1.0
-    changes["换仓前净值"] = result[nav_col].shift(1).loc[changes.index]
-    changes["换仓后净值"] = result[nav_col].loc[changes.index]
-    changes["当天涨跌幅"] = (
-        changes["换仓后净值"] / changes["换仓前净值"] - 1.0
-    )
-    changes["当天涨跌幅"] = changes["当天涨跌幅"].apply(lambda x: f"{x:+.2%}")
-    changes["累计收益"] = (
-        (changes["换仓后净值"] / start_nav - 1.0).apply(lambda x: f"{x:+.2%}")
-    )
+    return holding_df
 
-    rebalance_df = changes[["持仓", "调出", "调入", "换仓前净值", "换仓后净值", "当天涨跌幅", "累计收益"]]
-    rebalance_df.index.name = "日期"
-    return rebalance_df
+
+def _print_holding_summary(holding_df: pd.DataFrame, strategy_name: str, tail_n: int = 10) -> None:
+    """在终端打印最近若干条每日持仓记录摘要。"""
+    print(f"\n{'='*80}")
+    print(f"【每日持仓记录】{strategy_name}（最近 {tail_n} 条）")
+    print(f"{'='*80}")
+    print(holding_df.tail(tail_n).to_string())
+    print(f"{'='*80}")
 
 
 def print_latest_signal(strategy: StrategyConfig, result: pd.DataFrame, name_list: list[str]):

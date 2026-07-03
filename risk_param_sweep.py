@@ -398,17 +398,17 @@ def main():
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
     parser.add_argument(
         "--lookbacks",
-        default="22",
+        default="20",
         help="策略 lookback 列表，逗号分隔",
     )
     parser.add_argument(
         "--l1-ma-lookbacks",
-        default="10",
+        default="11",
         help="Layer1 均线回望周期列表，逗号分隔",
     )
     parser.add_argument(
         "--l1-drawdown-thresholds",
-        default="0.41",
+        default="0.15",
         help="Layer1 回撤阈值列表，逗号分隔",
     )
     parser.add_argument(
@@ -418,7 +418,7 @@ def main():
     )
     parser.add_argument(
         "--l2-atr-lookbacks",
-        default="14",
+        default="16",
         help="Layer2 ATR 回望周期列表，逗号分隔",
     )
     parser.add_argument(

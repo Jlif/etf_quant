@@ -1,0 +1,616 @@
+"""统一回测编排层
+
+为 main.py、latest_signal.py、risk_param_sweep.py 提供一致的数据获取、
+策略执行、信号打印与持仓记录逻辑。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import unicodedata
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+
+from strategy import rotation, weighted
+from utils import AppConfig, StrategyConfig
+
+
+def _display_width(s: str) -> int:
+    """计算字符串在终端中的显示宽度（中文等宽字符按 2 计）。"""
+    return sum(
+        2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+        for ch in str(s)
+    )
+
+
+def _ljust(s: str, width: int) -> str:
+    """按显示宽度左对齐。"""
+    return s + " " * max(0, width - _display_width(s))
+
+
+def _rjust(s: str, width: int) -> str:
+    """按显示宽度右对齐。"""
+    return " " * max(0, width - _display_width(s)) + s
+
+
+def detect_and_fix_price_jumps(
+    prices: pd.Series,
+    name: str,
+    threshold: float = 0.30,
+) -> pd.Series:
+    """
+    检测并修正价格序列中的异常复权跳空。
+
+    yfinance 等数据源对国内 ETF 的复权处理偶尔出错，
+    会出现单日涨跌幅远超正常范围（如 -50%）的虚假跳空。
+    本函数把这些点当作"复权系数错误"，对前期价格做整体缩放，
+    使修正后的序列保持连续。
+    """
+    prices = prices.copy().sort_index()
+    returns = prices.pct_change(fill_method=None).dropna()
+
+    fixed = prices.copy()
+    for date in returns.index:
+        daily_ret = returns.loc[date]
+        if abs(daily_ret) > threshold:
+            prev_date = returns.index[returns.index.get_loc(date) - 1]
+            factor = fixed.loc[date] / fixed.loc[prev_date]
+            mask = fixed.index <= prev_date
+            fixed.loc[mask] *= factor
+            direction = "下跌" if daily_ret < 0 else "上涨"
+            print(
+                f"  [数据修正] {name} 在 {date.date()} 出现异常{direction} "
+                f"({daily_ret:+.2%})，已整体缩放前期价格 (factor={factor:.4f})"
+            )
+            returns = fixed.pct_change().dropna()
+
+    return fixed
+
+
+def compute_signal_start_date(
+    strategy: StrategyConfig,
+    cutoff_date: datetime,
+    buffer_days: int = 20,
+) -> datetime:
+    """
+    根据策略 lookback 与三层风控参数，估算获取最新信号所需的历史起始日。
+
+    仅用于 latest_signal.py 等只需要最近一段数据的场景。
+    """
+    lookback = strategy.params.get("lookback", 20)
+
+    risk_lookbacks = [lookback]
+    risk_control = strategy.params.get("risk_control", {})
+    if risk_control.get("layer1", {}).get("enabled"):
+        risk_lookbacks.append(risk_control["layer1"].get("ma_lookback", 10))
+    if risk_control.get("layer2", {}).get("enabled"):
+        risk_lookbacks.append(risk_control["layer2"].get("atr_lookback", 14))
+    if risk_control.get("layer3", {}).get("enabled"):
+        risk_lookbacks.append(risk_control["layer3"].get("vol_lookback", 23))
+
+    required_trading_days = max(risk_lookbacks) + buffer_days
+    # 交易日约占日历日的 ~5/7，2 倍余量可覆盖周末和节假日
+    calendar_days = int(required_trading_days * 2) + 5
+    return cutoff_date - timedelta(days=calendar_days)
+
+
+def fetch_pool_data(
+    strategy: StrategyConfig,
+    app_config: AppConfig,
+    data_source,
+    *,
+    include_today: bool = False,
+    cutoff_date: datetime | None = None,
+    start_date: str | None = None,
+    min_bars: int | None = None,
+    silent: bool = False,
+) -> dict[str, pd.DataFrame]:
+    """获取策略候选池 OHLC 数据，自动对齐起始日期并修正异常复权跳空。
+
+    Parameters
+    ----------
+    include_today : bool
+        为 True 时强制重新拉取数据，确保包含最新行情（含当天）。
+    cutoff_date : datetime | None
+        仅保留 <= cutoff_date 的数据，latest_signal.py 使用。
+    start_date : str | None
+        覆盖默认 target_start；latest_signal.py 用于只取最近必要历史。
+        格式与 config 一致：YYYYMMDD。
+    min_bars : int | None
+        过滤后要求的最少条数，不足时抛 ValueError。
+    silent : bool
+        为 True 时抑制所有进度打印，risk_param_sweep 使用。
+    """
+    codes = [p.code for p in strategy.pool]
+    names = {p.code: p.name for p in strategy.pool}
+    cache_dir = app_config.backtest.cache_dir
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # 策略级起始日优先于全局起始日；start_date 参数优先级最高
+    target_start = start_date or strategy.start_date or app_config.backtest.start_date
+    target_start_dt = pd.to_datetime(target_start)
+
+    all_close = {}
+    all_open = {}
+    all_high = {}
+    all_low = {}
+    actual_starts = {}
+
+    for code in codes:
+        name = names[code]
+        cache_file = os.path.join(cache_dir, f"{code}_{data_source.name}.csv")
+        meta_file = cache_file + ".meta.json"
+
+        df = None
+        cache_sufficient = False
+
+        if os.path.exists(cache_file) and not include_today:
+            if not silent:
+                print(f"  [缓存] {code} ({name})")
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            close_col = f"{code}_close"
+            if close_col not in df.columns:
+                if not silent:
+                    print(f"  [缓存格式旧] 重新下载 {code} ({name})")
+                df = data_source.fetch(code, target_start)
+                df.to_csv(cache_file)
+                with open(meta_file, "w", encoding="utf-8") as f:
+                    json.dump({"adjusted": data_source.adjusted}, f)
+            elif os.path.exists(meta_file):
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                data_source.adjusted = meta.get("adjusted", True)
+        else:
+            action = "刷新" if include_today and os.path.exists(cache_file) else "下载"
+            if not silent:
+                print(f"  [{action}] {code} ({name}) via {data_source.name}")
+            try:
+                df = data_source.fetch(code, target_start)
+                df.to_csv(cache_file)
+                with open(meta_file, "w", encoding="utf-8") as f:
+                    json.dump({"adjusted": data_source.adjusted}, f)
+            except Exception as e:
+                if not silent:
+                    error_msg = str(e)
+                    if "RemoteDisconnected" in error_msg:
+                        print(f"  [警告] {code} ({name}) 网络连接失败，尝试回退缓存")
+                    elif "腾讯接口" in error_msg:
+                        tencent_msg = error_msg.split("腾讯接口")[-1].strip()
+                        print(f"  [警告] {code} ({name}) 腾讯接口{tencent_msg}，尝试回退缓存")
+                    else:
+                        print(f"  [警告] {code} ({name}) 下载失败: {error_msg[:100]}")
+                if os.path.exists(cache_file):
+                    df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                    if not silent:
+                        print(f"  [回退] 使用缓存数据: {code} ({name})")
+                else:
+                    raise
+
+        # 按 cutoff_date 过滤
+        if cutoff_date is not None and df is not None and not df.empty:
+            df_before = df[df.index.date <= cutoff_date.date()]
+            if not silent and len(df_before) < len(df):
+                print(
+                    f"  [过滤] {code} ({name}) 截断至 {cutoff_date.date()}，"
+                    f"原 {len(df)} 条 -> {len(df_before)} 条"
+                )
+            df = df_before
+
+        close_col = f"{code}_close"
+        open_col = f"{code}_open"
+        high_col = f"{code}_high"
+        low_col = f"{code}_low"
+
+        if close_col in df.columns:
+            all_close[name] = df[close_col]
+            all_open[name] = df[open_col]
+            all_high[name] = df[high_col]
+            all_low[name] = df[low_col]
+        elif code in df.columns:
+            if not silent:
+                print(f"  [缓存旧格式] 仅使用收盘价: {code} ({name})")
+            all_close[name] = df[code]
+            all_open[name] = df[code]
+            all_high[name] = df[code]
+            all_low[name] = df[code]
+        else:
+            raise ValueError(f"{cache_file} 中未找到 {close_col} 或 {code} 列")
+
+        actual_starts[name] = df.index[0]
+
+    # 异常复权跳空修正（以 close 为准，同比例缩放 open/high/low）
+    if data_source.adjusted:
+        for name in all_close:
+            fixed_close = detect_and_fix_price_jumps(all_close[name], name)
+            ratio = fixed_close / all_close[name]
+            all_close[name] = fixed_close
+            all_open[name] = all_open[name] * ratio
+            all_high[name] = all_high[name] * ratio
+            all_low[name] = all_low[name] * ratio
+    else:
+        if not silent:
+            print("  [数据] 当前数据源返回未复权价格，跳过复权跳空修正")
+
+    data_close = pd.DataFrame(all_close)
+    data_open = pd.DataFrame(all_open)
+    data_high = pd.DataFrame(all_high)
+    data_low = pd.DataFrame(all_low)
+
+    latest_etf_start = max(actual_starts.values())
+    earliest_etf_start = min(actual_starts.values())
+
+    dynamic_pool = strategy.params.get("dynamic_pool", False)
+
+    if not silent:
+        max_name_width = max(_display_width(name) for name in actual_starts)
+        start_lines = "\n".join(
+            f"      {_ljust(name, max_name_width)} : {d.date()}"
+            for name, d in sorted(actual_starts.items(), key=lambda x: x[1])
+        )
+        print("  [数据] 各 ETF 数据起始日期:")
+        print(start_lines)
+
+    if dynamic_pool:
+        effective_start = max(target_start_dt, earliest_etf_start)
+    else:
+        name_types = {p.name: p.type for p in strategy.pool}
+        lookback = strategy.params.get("lookback", 20)
+        required_starts = {}
+        for name in data_close.columns:
+            window = rotation._adaptive_window(name_types.get(name), lookback)
+            etf_series = all_close[name]
+            if len(etf_series) >= window:
+                required_starts[name] = etf_series.index[window - 1]
+            else:
+                required_starts[name] = etf_series.index[-1]
+        latest_required_start = max(required_starts.values())
+        effective_start = max(target_start_dt, latest_etf_start, latest_required_start)
+
+        if latest_required_start > max(target_start_dt, latest_etf_start) and not silent:
+            print(
+                f"  [注意] 部分 ETF 需要更长的预热期才能产生有效得分，"
+                f"策略实际起始日调整为 {latest_required_start.date()}"
+            )
+
+    if effective_start != data_close.index[0]:
+        if not silent:
+            print(f"  [调整] 策略实际起始日: {effective_start.date()}")
+        data_close = data_close.loc[data_close.index >= effective_start]
+        data_open = data_open.loc[data_open.index >= effective_start]
+        data_high = data_high.loc[data_high.index >= effective_start]
+        data_low = data_low.loc[data_low.index >= effective_start]
+
+    if min_bars is not None and len(data_close) < min_bars:
+        raise ValueError(
+            f"数据不足: 截断后仅 {len(data_close)} 条，需要至少 {min_bars} 条"
+        )
+
+    if not silent:
+        print(
+            f"  时间范围: {data_close.index[0].date()} ~ {data_close.index[-1].date()}, "
+            f"共 {len(data_close)} 条"
+        )
+
+    return {
+        "close": data_close,
+        "open": data_open,
+        "high": data_high,
+        "low": data_low,
+    }
+
+
+def run_strategy(
+    strategy: StrategyConfig,
+    app_config: AppConfig,
+    data_source,
+    *,
+    data: dict[str, pd.DataFrame] | None = None,
+    include_today: bool = False,
+    cutoff_date: datetime | None = None,
+    start_date: str | None = None,
+    min_bars: int | None = None,
+    silent: bool = False,
+) -> tuple[pd.DataFrame, list[str]]:
+    """执行单个策略回测，返回结果 DataFrame 与标的名称列表。
+
+    统一保证 rotation.run 始终收到 name_types，不生成报告、不打印信号、不保存文件。
+    """
+    if not silent:
+        print(f"\n{'='*60}")
+        print(f"【{strategy.name}】{strategy.description}")
+        print(f"  模式: {strategy.mode} | 参数: {strategy.params}")
+        print(f"{'='*60}")
+
+    if data is None:
+        data = fetch_pool_data(
+            strategy,
+            app_config,
+            data_source,
+            include_today=include_today,
+            cutoff_date=cutoff_date,
+            start_date=start_date,
+            min_bars=min_bars,
+            silent=silent,
+        )
+    name_list = data["close"].columns.tolist()
+
+    if strategy.mode == "rotation":
+        name_types = {p.name: p.type for p in strategy.pool}
+        result = rotation.run(data, name_list, strategy.params, name_types=name_types)
+        benchmark_col = f"{name_list[0]}净值"
+        benchmark_name = name_list[0]
+        for name in name_list:
+            price = data["close"][name].copy()
+            if name == benchmark_name:
+                first_valid = price.first_valid_index()
+                if first_valid is not None and first_valid != price.index[0]:
+                    price.loc[:first_valid] = price.loc[first_valid]
+            result[f"{name}净值"] = price / price.iloc[0]
+    elif strategy.mode == "weighted":
+        weights = {p.name: p.weight for p in strategy.pool}
+        result = weighted.run(data, name_list, weights, strategy.params)
+        for name in name_list:
+            result[f"{name}净值"] = result[name] / result[name].iloc[0]
+        benchmark_col = None
+    else:
+        raise ValueError(f"不支持的模式: {strategy.mode}")
+
+    return result, name_list
+
+
+def print_latest_signal(
+    strategy: StrategyConfig,
+    result: pd.DataFrame,
+    name_list: list[str],
+    last_quote_dates: dict[str, str] | None = None,
+):
+    """打印最新交易日的信号与操作建议（rotation / weighted）。"""
+    latest = result.iloc[-1]
+    prev = result.iloc[-2] if len(result) > 1 else None
+
+    print(f"\n{'='*60}")
+    print(f"【今日交易信号】{strategy.name}")
+    print(f"{'='*60}")
+    print(f"信号日期: {result.index[-1].date()}")
+    print(f"策略参数: lookback={strategy.params.get('lookback', 20)}日, top_n={strategy.params.get('top_n', 1)}")
+    print(f"{'-'*60}")
+
+    if strategy.mode == "rotation":
+        scoring = strategy.params.get("scoring", "momentum")
+        prefix = "得分_" if scoring == "slope_r2" else "涨幅_"
+
+        header = (
+            f"{_ljust('排名', 4)} "
+            f"{_ljust('ETF名称', 20)} "
+            f"{_ljust('代码', 10)} "
+            f"{_ljust('最新行情日', 12)} "
+            f"{_ljust('周期动量得分', 12)} "
+            f"{_ljust('建议仓位', 10)}"
+        )
+        print(header)
+        print("-" * 72)
+
+        scores = []
+        for name in name_list:
+            score_col = f"{prefix}{name}"
+            score = latest[score_col] if score_col in latest else np.nan
+            weight = latest[f"权重_{name}"] if f"权重_{name}" in latest else 0
+            code = next((p.code for p in strategy.pool if p.name == name), "")
+            last_date = last_quote_dates.get(name, "-") if last_quote_dates else "-"
+            scores.append((name, code, last_date, score, weight))
+
+        scores.sort(key=lambda x: x[3] if not pd.isna(x[3]) else -np.inf, reverse=True)
+
+        for i, (name, code, last_date, score, weight) in enumerate(scores, 1):
+            marker = "★" if weight > 0 else " "
+            weight_pct = f"{weight*100:.0f}%" if weight > 0 else "0%"
+            if pd.isna(score):
+                score_str = "-"
+            elif scoring == "momentum":
+                score_str = f"{score:+.2%}"
+            else:
+                score_str = f"{score:.4f}"
+            rank_str = f"{marker}{i}"
+            row = (
+                f"{_ljust(rank_str, 4)} "
+                f"{_ljust(name, 20)} "
+                f"{_ljust(code, 10)} "
+                f"{_ljust(last_date, 12)} "
+                f"{_ljust(score_str, 12)} "
+                f"{_ljust(weight_pct, 10)}"
+            )
+            print(row)
+
+        if prev is not None:
+            print(f"\n{'-'*60}")
+            print("持仓变化:")
+            current_holdings = [name for name in name_list if latest[f"权重_{name}"] > 0]
+            prev_holdings = [name for name in name_list if prev[f"权重_{name}"] > 0]
+
+            added = set(current_holdings) - set(prev_holdings)
+            removed = set(prev_holdings) - set(current_holdings)
+
+            if added:
+                for name in added:
+                    code = next((p.code for p in strategy.pool if p.name == name), "")
+                    print(f"  [买入] {name} ({code})")
+            if removed:
+                for name in removed:
+                    code = next((p.code for p in strategy.pool if p.name == name), "")
+                    print(f"  [卖出] {name} ({code})")
+            if not added and not removed:
+                print("  [维持] 持仓不变")
+
+        print(f"\n{'-'*60}")
+        print("风控提醒:")
+        risk_control = strategy.params.get("risk_control", {})
+        enabled_layers = []
+        if risk_control.get("layer1", {}).get("enabled"):
+            cfg = risk_control["layer1"]
+            enabled_layers.append(
+                f"Layer1 时序动量(ma={cfg.get('ma_lookback', 20)}, "
+                f"回撤>{cfg.get('drawdown_threshold', 0.05):.1%})"
+            )
+        if risk_control.get("layer2", {}).get("enabled"):
+            cfg = risk_control["layer2"]
+            enabled_layers.append(
+                f"Layer2 ATR止损({cfg.get('atr_multiplier', 3.0)}*ATR, "
+                f"lookback={cfg.get('atr_lookback', 14)})"
+            )
+        if risk_control.get("layer3", {}).get("enabled"):
+            cfg = risk_control["layer3"]
+            enabled_layers.append(
+                f"Layer3 波动率平准(target={cfg.get('target_vol', 0.08):.1%}, "
+                f"comfort={cfg.get('comfort_zone', 0.15):.1%}, "
+                f"caution={cfg.get('caution_zone', 0.25):.1%})"
+            )
+        if enabled_layers:
+            print(f"  · 已启用: {' | '.join(enabled_layers)}")
+        else:
+            print("  · 未启用任何风控层")
+
+        risk_reason = latest.get("风控原因", "")
+        if risk_reason:
+            print("  · 最新信号日触发以下风控，建议仓位已据此调整:")
+            for reason in str(risk_reason).split(";"):
+                reason = reason.strip()
+                if reason:
+                    print(f"    - {reason}")
+        else:
+            print("  · 最新信号日未触发风控，建议持仓由原始评分/动量决定")
+
+        print(f"{'='*60}")
+        print("操作建议:")
+        holdings = [(name, latest[f"权重_{name}"]) for name in name_list if latest[f"权重_{name}"] > 0]
+        for name, weight in holdings:
+            code = next((p.code for p in strategy.pool if p.name == name), "")
+            print(f"  持有 {name} ({code}): {weight*100:.0f}%")
+
+    elif strategy.mode == "weighted":
+        header = (
+            f"{_ljust('ETF名称', 20)} "
+            f"{_ljust('代码', 10)} "
+            f"{_ljust('目标权重', 10)} "
+            f"{_ljust('当前权重', 10)}"
+        )
+        print(header)
+        print("-" * 54)
+
+        weights = {p.name: p.weight for p in strategy.pool}
+        for name in name_list:
+            code = next((p.code for p in strategy.pool if p.name == name), "")
+            target = weights.get(name, 0)
+            row = (
+                f"{_ljust(name, 20)} "
+                f"{_ljust(code, 10)} "
+                f"{_ljust(f'{target:.0f}%', 10)} "
+                f"{_ljust('-', 10)}"
+            )
+            print(row)
+
+        print(f"{'='*60}")
+        print("操作建议: 按上述目标权重配置仓位")
+
+    print(f"{'='*60}")
+
+
+def build_holding_df(result: pd.DataFrame) -> pd.DataFrame | None:
+    """从 rotation 策略结果中提取每日持仓记录 DataFrame。"""
+    if "持仓" not in result.columns:
+        return None
+
+    cols = ["持仓", "当天动量第一", "风控原因"]
+    if "轮动策略净值" in result.columns:
+        cols.append("轮动策略净值")
+    if "轮动策略日收益率" in result.columns:
+        cols.append("轮动策略日收益率")
+
+    holding_df = result[cols].copy()
+    holding_df.index.name = "日期"
+
+    if "轮动策略日收益率" in holding_df.columns:
+        holding_df["轮动策略日收益率"] = holding_df["轮动策略日收益率"].apply(
+            lambda x: f"{x:+.2%}"
+        )
+
+    return holding_df
+
+
+def print_holding_summary(holding_df: pd.DataFrame, strategy_name: str, tail_n: int = 10) -> None:
+    """在终端打印最近若干条每日持仓记录摘要。"""
+    print(f"\n{'='*80}")
+    print(f"【每日持仓记录】{strategy_name}（最近 {tail_n} 条）")
+    print(f"{'='*80}")
+    print(holding_df.tail(tail_n).to_string())
+    print(f"{'='*80}")
+
+
+def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, name_list: list[str]):
+    """打印 rotation 策略各 ETF 的持有天数与收益贡献占比。"""
+    final_nav = result["轮动策略净值"].iloc[-1]
+    total_return = final_nav - 1.0
+
+    col_widths = {
+        "ETF名称": 18,
+        "代码": 10,
+        "持有天数": 10,
+        "累计贡献": 12,
+        "贡献占比": 12,
+    }
+
+    total_width = sum(col_widths.values()) + len(col_widths) - 1
+
+    print(f"\n{'='*total_width}")
+    print(f"【持仓统计与收益贡献】{strategy.name}")
+    print(f"{'='*total_width}")
+
+    headers = [
+        _ljust("ETF名称", col_widths["ETF名称"]),
+        _ljust("代码", col_widths["代码"]),
+        _ljust("持有天数", col_widths["持有天数"]),
+        _rjust("累计贡献", col_widths["累计贡献"]),
+        _rjust("贡献占比", col_widths["贡献占比"]),
+    ]
+    print(" ".join(headers))
+    print("-" * total_width)
+
+    rows = []
+    total_contribution = 0.0
+    for name in name_list:
+        code = next((p.code for p in strategy.pool if p.name == name), "")
+        hold_days = int((result[f"权重_{name}"] > 0).sum())
+        contrib_col = f"贡献_日收益_{name}"
+        if contrib_col in result.columns:
+            contribution = result[contrib_col].sum()
+        else:
+            contribution = 0.0
+        total_contribution += contribution
+        rows.append((name, code, hold_days, contribution))
+
+    abs_total = abs(total_contribution) if total_contribution != 0 else 1.0
+    rows_with_ratio = [
+        (name, code, hold_days, contribution, contribution / abs_total)
+        for name, code, hold_days, contribution in rows
+    ]
+    rows_with_ratio.sort(key=lambda x: x[4], reverse=True)
+
+    for name, code, hold_days, contribution, ratio in rows_with_ratio:
+        contrib_str = f"{contribution:+.2%}"
+        ratio_str = f"{ratio:+.1%}"
+        row = [
+            _ljust(name, col_widths["ETF名称"]),
+            _ljust(code, col_widths["代码"]),
+            _ljust(str(hold_days), col_widths["持有天数"]),
+            _rjust(contrib_str, col_widths["累计贡献"]),
+            _rjust(ratio_str, col_widths["贡献占比"]),
+        ]
+        print(" ".join(row))
+
+    print("-" * total_width)
+    print(f"合计贡献（简单加总口径）: {total_contribution:+.2%}")
+    print(f"策略累计收益（复利口径）:   {total_return:+.2%}")
+    print("  注：因复利再投资效应，简单加总的贡献合计会低于复利累计收益")
+    print(f"{'='*total_width}")

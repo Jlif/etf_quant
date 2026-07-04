@@ -25,7 +25,7 @@ import unicodedata
 sys.path.insert(0, os.path.dirname(__file__))
 
 from data_source import get_data_source
-from main import fetch_pool_data, run_strategy
+from core.orchestrator import fetch_pool_data, run_strategy
 from utils import load_config
 
 

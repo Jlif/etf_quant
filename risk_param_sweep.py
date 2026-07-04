@@ -446,17 +446,17 @@ def main():
     )
     parser.add_argument(
         "--l3-target-vols",
-        default="0.36",
+        default="0.3",
         help="Layer3 目标波动率列表，逗号分隔",
     )
     parser.add_argument(
         "--l3-vol-lookbacks",
-        default="16",
+        default="14",
         help="Layer3 波动率回望周期列表，逗号分隔",
     )
     parser.add_argument(
         "--l3-comfort-zones",
-        default="0.27",
+        default="0.25",
         help="Layer3 舒适区波动率上限列表，逗号分隔",
     )
     parser.add_argument(
@@ -471,7 +471,7 @@ def main():
     )
     parser.add_argument(
         "--l3-transition-powers",
-        default="3.0",
+        default="4.0",
         help="Layer3 平滑过渡幂指数列表，逗号分隔；'none' 表示不使用平滑过渡",
     )
     parser.add_argument(

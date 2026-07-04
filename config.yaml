@@ -101,7 +101,7 @@ strategies:
           enabled: true
           ma_lookback: 11
           drawdown_lookback: 5
-          drawdown_threshold: 0.25
+          drawdown_threshold: 0.2
         layer2:
           enabled: true
           atr_multiplier: 3.7

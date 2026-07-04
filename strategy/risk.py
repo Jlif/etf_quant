@@ -226,7 +226,7 @@ def layer1_market_filter(
     drawdown_threshold: float,
     safe_haven: str,
     drawdown_lookback: int = 252,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, dict[str, pd.Series]]:
     """
     第一层：组合趋势/回撤过滤。
 
@@ -251,8 +251,9 @@ def layer1_market_filter(
 
     Returns
     -------
-    pd.DataFrame
-        调整后的权重表（副本）。
+    tuple[pd.DataFrame, dict[str, pd.Series]]
+        - 调整后的权重表（副本）
+        - 触发原因字典，包含 "ma" 和 "drawdown" 两个布尔 Series
     """
     adjusted = weights_df.copy()
     weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
@@ -270,9 +271,11 @@ def layer1_market_filter(
     peak = portfolio_value.rolling(drawdown_lookback, min_periods=1).max()
     drawdown = (portfolio_value - peak) / peak
 
-    triggered = (portfolio_value < ma) | (drawdown < -drawdown_threshold)
+    ma_triggered = portfolio_value < ma
+    drawdown_triggered = drawdown < -drawdown_threshold
+    triggered = ma_triggered | drawdown_triggered
     if not triggered.any():
-        return adjusted
+        return adjusted, {"ma": ma_triggered, "drawdown": drawdown_triggered}
 
     risk_cols = [c for c in weight_cols if c != f"权重_{safe_haven}"]
     safe_col = f"权重_{safe_haven}"
@@ -285,7 +288,7 @@ def layer1_market_filter(
     # 归一化，避免浮点误差导致权重和不为 1
     total = adjusted[weight_cols].sum(axis=1)
     adjusted = adjusted.div(total, axis=0).fillna(0.0)
-    return adjusted
+    return adjusted, {"ma": ma_triggered, "drawdown": drawdown_triggered}
 
 
 def layer2_atr_trailing_stop(

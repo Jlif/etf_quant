@@ -214,7 +214,7 @@ def run(
         weight_cols = [f"权重_{n}" for n in name_list]
         weights_df = df[weight_cols].copy()
         pre_weights = weights_df.copy()
-        adjusted_weights = layer1_market_filter(
+        adjusted_weights, l1_triggers = layer1_market_filter(
             weights_df=weights_df,
             close_df=close_df,
             ma_lookback=ma_lookback,
@@ -226,16 +226,13 @@ def run(
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
 
         # 记录触发第一层的风控日（组合级字符串）
-        risk_cols = [c for c in weight_cols if c != f"权重_{safe_haven}"]
-        triggered = (pre_weights[risk_cols].sum(axis=1) > 0) & (
-            df[f"权重_{safe_haven}"] >= 0.999
-        )
+        triggered = l1_triggers["ma"] | l1_triggers["drawdown"]
         if triggered.any():
             df.loc[triggered, "风控原因"] += (
                 f"第一层: 组合趋势/回撤过滤(跌破{ma_lookback}日均线或"
                 f"{drawdown_lookback}日高点回撤>{drawdown_threshold:.1%}); "
             )
-            # 记录每只被清零的风险资产
+            # 记录每只被清零的风险资产，并细分均线/回撤原因
             for name in name_list:
                 if name == safe_haven:
                     continue
@@ -243,7 +240,12 @@ def run(
                     df[f"权重_{name}"] == 0
                 )
                 if etf_triggered.any():
-                    df.loc[etf_triggered, f"风控原因_{name}"] = "L1"
+                    ma_only = etf_triggered & l1_triggers["ma"] & ~l1_triggers["drawdown"]
+                    dd_only = etf_triggered & ~l1_triggers["ma"] & l1_triggers["drawdown"]
+                    both = etf_triggered & l1_triggers["ma"] & l1_triggers["drawdown"]
+                    df.loc[ma_only, f"风控原因_{name}"] = "L1-均线"
+                    df.loc[dd_only, f"风控原因_{name}"] = "L1-回撤"
+                    df.loc[both, f"风控原因_{name}"] = "L1-均线+回撤"
 
     # 3.6 第二层：ATR 跟踪止损拦截
     layer2 = risk_control.get("layer2", {})

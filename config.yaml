@@ -26,14 +26,14 @@ strategies:
       - { code: "159915", name: "创业板ETF" }
     params:
       lookback: 20
-      scoring: momentum      # momentum | slope_r2
+      scoring: momentum # momentum | slope_r2
       top_n: 1
 
   - name: "跨市场动量轮动"
     description: "红利/创业板/纳指/黄金，20日涨幅选最强"
     enabled: false
     mode: rotation
-    start_date: "20150101"    # 策略级起始日（会取各 ETF 实际最晚起始日）
+    start_date: "20150101" # 策略级起始日（会取各 ETF 实际最晚起始日）
     pool:
       - { code: "510880", name: "红利ETF" }
       - { code: "159915", name: "创业板ETF" }
@@ -75,25 +75,26 @@ strategies:
     mode: rotation
     pool:
       - { code: "510300", name: "沪深300ETF", type: "宽基" }
-      # - { code: "512040", name: "价值100ETF富国", type: "价值" }
-      # - { code: "515180", name: "红利ETF易方达", type: "红利" }
-      - { code: "159915", name: "创业板ETF", type: "成长" }
-      - { code: "511260", name: "10年国债ETF国泰", type: "" }
+      - { code: "159361", name: "A500ETF易方达", type: "宽基" }
+      - { code: "588080", name: "科创50ETF易方达", type: "宽基" }
+      - { code: "159915", name: "创业板ETF", type: "宽基" }
       - { code: "513500", name: "标普500ETF博时", type: "宽基" }
-      - { code: "518880", name: "黄金ETF", type: "商品" }
-      - { code: "588080", name: "科创50ETF易方达", type: "成长" }
+      - { code: "512040", name: "价值100ETF富国", type: "价值" }
+      - { code: "159263", name: "价值ETF易方达", type: "价值" }
+      - { code: "159259", name: "成长ETF易方达", type: "成长" }
       - { code: "159740", name: "恒生科技ETF大成", type: "行业" }
       - { code: "512690", name: "酒ETF鹏华", type: "行业" }
+      - { code: "159870", name: "化工ETF鹏华", type: "行业" }
       - { code: "159316", name: "港股通创新药ETF易方达", type: "行业" }
-      # - { code: "159361", name: "A500ETF易方达", type: "宽基" }
-      # - { code: "159201", name: "自由现金流ETF华夏", type: "自由现金流" }
+      - { code: "511260", name: "10年国债ETF国泰", type: "" }
+      - { code: "518880", name: "黄金ETF", type: "商品" }
     params:
       lookback: 20
       scoring: momentum
       adaptive_scoring: false
       benchmark: "沪深300ETF"
       top_n: 2
-      dynamic_pool: true       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
+      dynamic_pool: true # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
       safe_haven: "10年国债ETF国泰"
       risk_control:
         layer1:

@@ -20,7 +20,7 @@ from .risk import (
 
 def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
     """Return the rolling window needed for an ETF type's adaptive scorer."""
-    if etf_type == "行业股票":
+    if etf_type == "行业":
         return 62
     if etf_type in {"红利", "自由现金流", "价值"}:
         return 41

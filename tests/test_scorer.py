@@ -20,7 +20,7 @@ def test_sector_residual_momentum_positive_when_outperforming():
     # ETF 持续上涨，benchmark 横盘
     etf = _price_series(np.linspace(100, 120, 62))
     benchmark = _price_series(np.linspace(100, 102, 62))
-    score = adaptive_momentum_score(etf, etf_type="行业股票", benchmark_series=benchmark, lookback=20)
+    score = adaptive_momentum_score(etf, etf_type="行业", benchmark_series=benchmark, lookback=20)
     assert score > 0
 
 

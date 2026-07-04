@@ -67,12 +67,12 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         # 校验 adaptive_scoring 的 benchmark 参数
         params = s.get("params", {})
         if params.get("adaptive_scoring"):
-            has_sector = any(p.type == "行业股票" for p in pool)
+            has_sector = any(p.type == "行业" for p in pool)
             if has_sector:
                 benchmark = params.get("benchmark")
                 if not benchmark:
                     raise ValueError(
-                        f'策略 "{s["name"]}" 开启 adaptive_scoring 且包含行业股票时，'
+                        f'策略 "{s["name"]}" 开启 adaptive_scoring 且包含行业时，'
                         f'必须在 params 中配置 benchmark'
                     )
                 pool_names = {p.name for p in pool}

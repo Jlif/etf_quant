@@ -77,7 +77,7 @@ def _residual_momentum_score(
     lookback: int = 20,
 ) -> float:
     """
-    行业股票：相对 benchmark 的残差动量 × 动量加速度修正。
+    行业：相对 benchmark 的残差动量 × 动量加速度修正。
     """
     if srs.shape[0] < max(lookback, 60) + 1:
         return np.nan
@@ -176,9 +176,9 @@ def adaptive_momentum_score(
     srs : pd.Series
         收盘价序列
     etf_type : str | None
-        ETF 类型，如 "行业股票", "红利", "自由现金流", "成长", "商品", "宽基"
+        ETF 类型，如 "行业", "红利", "自由现金流", "成长", "商品", "宽基"
     benchmark_series : pd.Series | None
-        行业股票残差动量所需的基准序列
+        行业残差动量所需的基准序列
     lookback : int
         默认回望周期，不同类型内部可能使用固定周期
 
@@ -187,9 +187,9 @@ def adaptive_momentum_score(
     float
         得分，数据不足时返回 np.nan
     """
-    if etf_type == "行业股票":
+    if etf_type == "行业":
         if benchmark_series is None:
-            raise ValueError("行业股票动量需要提供 benchmark_series")
+            raise ValueError("行业动量需要提供 benchmark_series")
         return _residual_momentum_score(srs, benchmark_series, lookback=20)
     elif etf_type in {"红利", "自由现金流", "价值"}:
         return _risk_adjusted_momentum_score(srs, lookback=40)

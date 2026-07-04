@@ -19,7 +19,7 @@ strategies:
     mode: rotation
     pool:
       - { code: "510300", name: "沪深300ETF", type: "宽基" }
-      - { code: "512690", name: "酒ETF", type: "行业股票" }
+      - { code: "512690", name: "酒ETF", type: "行业" }
     params:
       adaptive_scoring: true
       top_n: 1
@@ -39,7 +39,7 @@ strategies:
   - name: "测试策略"
     mode: rotation
     pool:
-      - { code: "512690", name: "酒ETF", type: "行业股票" }
+      - { code: "512690", name: "酒ETF", type: "行业" }
     params:
       adaptive_scoring: true
       benchmark: "沪深300ETF"

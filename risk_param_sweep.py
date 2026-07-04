@@ -67,6 +67,7 @@ def _ljust(s: str, width: int) -> str:
 class SweepResult:
     lookback: int
     l1_ma_lookback: int
+    l1_drawdown_lookback: int
     l1_drawdown_threshold: float
     l2_atr_multiplier: float
     l2_atr_lookback: int
@@ -114,6 +115,7 @@ def _compute_sharpe(nav: pd.Series) -> float:
 
 def _build_risk_control(
     l1_ma_lookback: int,
+    l1_drawdown_lookback: int,
     l1_drawdown_threshold: float,
     l2_atr_multiplier: float,
     l2_atr_lookback: int,
@@ -139,6 +141,7 @@ def _build_risk_control(
         "layer1": {
             "enabled": True,
             "ma_lookback": l1_ma_lookback,
+            "drawdown_lookback": l1_drawdown_lookback,
             "drawdown_threshold": l1_drawdown_threshold,
         },
         "layer2": {
@@ -156,6 +159,7 @@ def sweep_risk_params(
     data_source,
     lookbacks: list[int],
     l1_ma_lookbacks: list[int],
+    l1_drawdown_lookbacks: list[int],
     l1_drawdown_thresholds: list[float],
     l2_atr_multipliers: list[float],
     l2_atr_lookbacks: list[int],
@@ -174,6 +178,7 @@ def sweep_risk_params(
     total_combos = (
         len(lookbacks)
         * len(l1_ma_lookbacks)
+        * len(l1_drawdown_lookbacks)
         * len(l1_drawdown_thresholds)
         * len(l2_atr_multipliers)
         * len(l2_atr_lookbacks)
@@ -189,6 +194,7 @@ def sweep_risk_params(
     combos = itertools.product(
         lookbacks,
         l1_ma_lookbacks,
+        l1_drawdown_lookbacks,
         l1_drawdown_thresholds,
         l2_atr_multipliers,
         l2_atr_lookbacks,
@@ -203,6 +209,7 @@ def sweep_risk_params(
     for (
         lookback,
         l1_ma_lb,
+        l1_dd_lb,
         l1_dd,
         l2_atr_mul,
         l2_atr_lb,
@@ -230,6 +237,7 @@ def sweep_risk_params(
 
         params["risk_control"] = _build_risk_control(
             l1_ma_lb,
+            l1_dd_lb,
             l1_dd,
             l2_atr_mul,
             l2_atr_lb,
@@ -254,6 +262,7 @@ def sweep_risk_params(
                 SweepResult(
                     lookback=lookback,
                     l1_ma_lookback=l1_ma_lb,
+                    l1_drawdown_lookback=l1_dd_lb,
                     l1_drawdown_threshold=l1_dd,
                     l2_atr_multiplier=l2_atr_mul,
                     l2_atr_lookback=l2_atr_lb,
@@ -275,7 +284,7 @@ def sweep_risk_params(
             power_str = "None" if l3_power is None else f"{l3_power:.1f}"
             print(
                 f"  [跳过] lookback={lookback}, "
-                f"l1=({l1_ma_lb},{l1_dd:.2%}), "
+                f"l1=({l1_ma_lb},{l1_dd_lb},{l1_dd:.2%}), "
                 f"l2=({l2_atr_mul},{l2_atr_lb}), "
                 f"l3=({l3_target_vol:.2%},{l3_vol_lb},{l3_comfort:.2%},{l3_caution:.2%},{l3_scale},power={power_str}): {e}"
             )
@@ -293,12 +302,18 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
         "sharpe": lambda r: r.sharpe,
     }.get(sort_by, lambda r: r.cagr)
 
-    # 年化收益率默认倒序；最大回撤越小越好，所以升序
-    sorted_results = sorted(results, key=sort_key, reverse=(sort_by != "max_dd"))
+    # 默认按夏普倒序、再按 CAGR 倒序；最大回撤越小越好，所以升序
+    if sort_by == "cagr":
+        sorted_results = sorted(results, key=lambda r: (r.sharpe, r.cagr), reverse=True)
+        sort_label = "夏普+CAGR"
+    else:
+        sorted_results = sorted(results, key=sort_key, reverse=(sort_by != "max_dd"))
+        sort_label = sort_by
 
     col_widths = {
         "lookback": 10,
         "l1_ma": 8,
+        "l1_dd_lb": 10,
         "l1_dd": 8,
         "l2_mul": 8,
         "l2_lb": 8,
@@ -318,6 +333,7 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
     headers = [
         _rjust("lookback", col_widths["lookback"]),
         _rjust("l1_ma", col_widths["l1_ma"]),
+        _rjust("l1_dd_lb", col_widths["l1_dd_lb"]),
         _rjust("l1_dd", col_widths["l1_dd"]),
         _rjust("l2_mul", col_widths["l2_mul"]),
         _rjust("l2_lb", col_widths["l2_lb"]),
@@ -336,7 +352,7 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
 
     total_width = sum(col_widths.values()) + len(col_widths) - 1
     print("\n" + "=" * total_width)
-    print(f"按 {'CAGR' if sort_by == 'cagr' else sort_by} {'倒序' if sort_by != 'max_dd' else '升序'} 排列")
+    print(f"按 {sort_label} {'倒序' if sort_by != 'max_dd' else '升序'} 排列")
     print("-" * total_width)
     print(" ".join(headers))
     print("-" * total_width)
@@ -344,6 +360,7 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
         row = [
             _rjust(str(r.lookback), col_widths["lookback"]),
             _rjust(str(r.l1_ma_lookback), col_widths["l1_ma"]),
+            _rjust(str(r.l1_drawdown_lookback), col_widths["l1_dd_lb"]),
             _rjust(f"{r.l1_drawdown_threshold:.1%}", col_widths["l1_dd"]),
             _rjust(f"{r.l2_atr_multiplier:.1f}", col_widths["l2_mul"]),
             _rjust(str(r.l2_atr_lookback), col_widths["l2_lb"]),
@@ -370,6 +387,7 @@ def save_results_csv(results: list[SweepResult], path: str) -> None:
             {
                 "lookback": r.lookback,
                 "l1_ma_lookback": r.l1_ma_lookback,
+                "l1_drawdown_lookback": r.l1_drawdown_lookback,
                 "l1_drawdown_threshold": r.l1_drawdown_threshold,
                 "l2_atr_multiplier": r.l2_atr_multiplier,
                 "l2_atr_lookback": r.l2_atr_lookback,
@@ -407,18 +425,23 @@ def main():
         help="Layer1 均线回望周期列表，逗号分隔",
     )
     parser.add_argument(
+        "--l1-drawdown-lookbacks",
+        default="5",
+        help="Layer1 回撤回望周期列表，逗号分隔",
+    )
+    parser.add_argument(
         "--l1-drawdown-thresholds",
-        default="0.15",
+        default="0.25",
         help="Layer1 回撤阈值列表，逗号分隔",
     )
     parser.add_argument(
         "--l2-atr-multipliers",
-        default="3.0",
+        default="3.7",
         help="Layer2 ATR 乘数列表，逗号分隔",
     )
     parser.add_argument(
         "--l2-atr-lookbacks",
-        default="16",
+        default="20",
         help="Layer2 ATR 回望周期列表，逗号分隔",
     )
     parser.add_argument(
@@ -482,6 +505,7 @@ def main():
 
     lookbacks = _parse_int_list(args.lookbacks)
     l1_ma_lookbacks = _parse_int_list(args.l1_ma_lookbacks)
+    l1_drawdown_lookbacks = _parse_int_list(args.l1_drawdown_lookbacks)
     l1_drawdown_thresholds = _parse_float_list(args.l1_drawdown_thresholds)
     l2_atr_multipliers = _parse_float_list(args.l2_atr_multipliers)
     l2_atr_lookbacks = _parse_int_list(args.l2_atr_lookbacks)
@@ -495,6 +519,7 @@ def main():
     total_combos = (
         len(lookbacks)
         * len(l1_ma_lookbacks)
+        * len(l1_drawdown_lookbacks)
         * len(l1_drawdown_thresholds)
         * len(l2_atr_multipliers)
         * len(l2_atr_lookbacks)
@@ -509,6 +534,7 @@ def main():
         f"\n策略: {strategy.name}"
         f"\nlookback: {lookbacks}"
         f"\nLayer1 ma_lookback: {l1_ma_lookbacks}"
+        f"\nLayer1 drawdown_lookback: {l1_drawdown_lookbacks}"
         f"\nLayer1 drawdown_threshold: {l1_drawdown_thresholds}"
         f"\nLayer2 atr_multiplier: {l2_atr_multipliers}"
         f"\nLayer2 atr_lookback: {l2_atr_lookbacks}"
@@ -544,6 +570,7 @@ def main():
         data_source=data_source,
         lookbacks=lookbacks,
         l1_ma_lookbacks=l1_ma_lookbacks,
+        l1_drawdown_lookbacks=l1_drawdown_lookbacks,
         l1_drawdown_thresholds=l1_drawdown_thresholds,
         l2_atr_multipliers=l2_atr_multipliers,
         l2_atr_lookbacks=l2_atr_lookbacks,

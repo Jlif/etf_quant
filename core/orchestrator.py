@@ -97,6 +97,25 @@ def compute_signal_start_date(
     return cutoff_date - timedelta(days=calendar_days)
 
 
+def _merge_price_data(old_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
+    """合并旧缓存与新下载数据，新数据覆盖重叠日期，结果按日期排序。"""
+    if old_df is None or old_df.empty:
+        return new_df.copy()
+    if new_df is None or new_df.empty:
+        return old_df.copy()
+    # 去重：new_df 优先
+    merged = pd.concat([old_df, new_df])
+    merged = merged[~merged.index.duplicated(keep="last")]
+    return merged.sort_index()
+
+
+def _filter_by_cutoff(df: pd.DataFrame, cutoff_date: datetime) -> pd.DataFrame:
+    """按 cutoff_date 截断数据。"""
+    if df is None or df.empty:
+        return df
+    return df[df.index.date <= cutoff_date.date()]
+
+
 def fetch_pool_data(
     strategy: StrategyConfig,
     app_config: AppConfig,
@@ -148,30 +167,79 @@ def fetch_pool_data(
         cache_sufficient = False
 
         if os.path.exists(cache_file) and not include_today:
-            if not silent:
-                print(f"  [缓存] {code} ({name})")
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             close_col = f"{code}_close"
             if close_col not in df.columns:
                 if not silent:
                     print(f"  [缓存格式旧] 重新下载 {code} ({name})")
-                df = data_source.fetch(code, target_start)
-                df.to_csv(cache_file)
-                with open(meta_file, "w", encoding="utf-8") as f:
-                    json.dump({"adjusted": data_source.adjusted}, f)
-            elif os.path.exists(meta_file):
-                with open(meta_file, "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                data_source.adjusted = meta.get("adjusted", True)
-        else:
+                df = None
+            else:
+                if os.path.exists(meta_file):
+                    with open(meta_file, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                    data_source.adjusted = meta.get("adjusted", True)
+
+                # 检查缓存是否覆盖目标起始日（允许 30 天容差，处理节假日/非交易日）
+                cache_covers_start = df.index[0] <= target_start_dt + timedelta(days=30)
+                # 若传了 cutoff_date，检查缓存是否覆盖到截止日且条数足够
+                if cutoff_date is not None:
+                    df_before = _filter_by_cutoff(df, cutoff_date)
+                    last_date = df_before.index[-1] if not df_before.empty else None
+                    cache_reaches_cutoff = (
+                        last_date is not None and last_date.date() >= cutoff_date.date()
+                    )
+                    enough_bars = min_bars is None or len(df_before) >= min_bars
+                    if cache_covers_start and cache_reaches_cutoff and enough_bars:
+                        if not silent:
+                            print(f"  [缓存] {code} ({name}) 已是最新")
+                        df = df_before
+                        cache_sufficient = True
+                    elif not cache_covers_start and not silent:
+                        print(
+                            f"  [更新] {code} ({name}) 缓存起始 {df.index[0].date()} "
+                            f"晚于目标起始 {target_start_dt.date()}"
+                        )
+                    elif not cache_reaches_cutoff and not silent:
+                        print(
+                            f"  [更新] {code} ({name}) 缓存最新日期 {last_date.date()} "
+                            f"早于截止日 {cutoff_date.date()}"
+                        )
+                    elif not enough_bars and not silent:
+                        print(
+                            f"  [更新] {code} ({name}) 缓存数据不足 "
+                            f"({len(df_before)} < {min_bars})"
+                        )
+                else:
+                    if cache_covers_start:
+                        if not silent:
+                            print(f"  [缓存] {code} ({name})")
+                        cache_sufficient = True
+                    elif not silent:
+                        print(
+                            f"  [更新] {code} ({name}) 缓存起始 {df.index[0].date()} "
+                            f"晚于目标起始 {target_start_dt.date()}"
+                        )
+
+        if not cache_sufficient:
             action = "刷新" if include_today and os.path.exists(cache_file) else "下载"
             if not silent:
                 print(f"  [{action}] {code} ({name}) via {data_source.name}")
             try:
-                df = data_source.fetch(code, target_start)
+                df_new = data_source.fetch(code, target_start)
+                # 与已有缓存合并，避免 latest_signal 用短历史覆盖长缓存
+                if os.path.exists(cache_file):
+                    df_old = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                    df = _merge_price_data(df_old, df_new)
+                else:
+                    df = df_new.copy()
                 df.to_csv(cache_file)
                 with open(meta_file, "w", encoding="utf-8") as f:
                     json.dump({"adjusted": data_source.adjusted}, f)
+                if not silent and cutoff_date is not None:
+                    print(
+                        f"  [缓存] {code} ({name}) 已合并并保存，"
+                        f"最新 {df.index[-1].date()}"
+                    )
             except Exception as e:
                 if not silent:
                     error_msg = str(e)
@@ -190,8 +258,8 @@ def fetch_pool_data(
                     raise
 
         # 按 cutoff_date 过滤
-        if cutoff_date is not None and df is not None and not df.empty:
-            df_before = df[df.index.date <= cutoff_date.date()]
+        if cutoff_date is not None and df is not None and not df.empty and not cache_sufficient:
+            df_before = _filter_by_cutoff(df, cutoff_date)
             if not silent and len(df_before) < len(df):
                 print(
                     f"  [过滤] {code} ({name}) 截断至 {cutoff_date.date()}，"

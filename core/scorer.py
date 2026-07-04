@@ -187,7 +187,7 @@ def adaptive_momentum_score(
     float
         得分，数据不足时返回 np.nan
     """
-    if etf_type == "行业":
+    if etf_type == "行业股票":
         if benchmark_series is None:
             raise ValueError("行业股票动量需要提供 benchmark_series")
         return _residual_momentum_score(srs, benchmark_series, lookback=20)

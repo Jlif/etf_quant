@@ -107,12 +107,12 @@ def main():
         benchmark_col = f"{name_list[0]}净值"
         benchmark_series = result[benchmark_col] if benchmark_col in result.columns else None
         if benchmark_series is not None:
-            benchmark_returns = benchmark_series.pct_change().fillna(0)
+            benchmark_returns = benchmark_series.pct_change(fill_method=None).fillna(0)
             benchmark_returns.name = benchmark_col
         else:
             benchmark_returns = None
 
-        strategy_returns = result["轮动策略净值"].pct_change().fillna(0)
+        strategy_returns = result["轮动策略净值"].pct_change(fill_method=None).fillna(0)
         strategy_returns.name = "轮动策略净值"
 
         holding_df = build_holding_df(result)

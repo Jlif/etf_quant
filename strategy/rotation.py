@@ -243,9 +243,9 @@ def run(
                     ma_only = etf_triggered & l1_triggers["ma"] & ~l1_triggers["drawdown"]
                     dd_only = etf_triggered & ~l1_triggers["ma"] & l1_triggers["drawdown"]
                     both = etf_triggered & l1_triggers["ma"] & l1_triggers["drawdown"]
-                    df.loc[ma_only, f"风控原因_{name}"] = "L1-均线"
-                    df.loc[dd_only, f"风控原因_{name}"] = "L1-回撤"
-                    df.loc[both, f"风控原因_{name}"] = "L1-均线+回撤"
+                    df.loc[ma_only, f"风控原因_{name}"] = "L1-组合均线"
+                    df.loc[dd_only, f"风控原因_{name}"] = "L1-组合回撤"
+                    df.loc[both, f"风控原因_{name}"] = "L1-组合均线+回撤"
 
     # 3.6 第二层：ATR 跟踪止损拦截
     layer2 = risk_control.get("layer2", {})

@@ -449,6 +449,21 @@ def print_latest_signal(
     if strategy.mode == "rotation":
         scoring = strategy.params.get("scoring", "momentum")
         prefix = "得分_" if scoring == "slope_r2" else "涨幅_"
+        lookback = strategy.params.get("lookback", 20)
+
+        # 计算每只 ETF 的 lookback 日年化波动率
+        vol_map = {}
+        for name in name_list:
+            if name in result.columns:
+                prices = result[name].dropna()
+                returns = prices.pct_change(fill_method=None).dropna()
+                if len(returns) >= 2:
+                    vol = returns.tail(lookback).std() * np.sqrt(252)
+                    vol_map[name] = vol
+                else:
+                    vol_map[name] = np.nan
+            else:
+                vol_map[name] = np.nan
 
         header = (
             f"{_ljust('排名', 4)} "
@@ -456,10 +471,12 @@ def print_latest_signal(
             f"{_ljust('代码', 10)} "
             f"{_ljust('最新行情日', 12)} "
             f"{_ljust('周期动量得分', 12)} "
-            f"{_ljust('建议仓位', 10)}"
+            f"{_ljust('波动率', 10)} "
+            f"{_ljust('建议仓位', 10)} "
+            f"{_ljust('未入选原因', 12)}"
         )
         print(header)
-        print("-" * 72)
+        print("-" * 96)
 
         scores = []
         for name in name_list:
@@ -468,11 +485,20 @@ def print_latest_signal(
             weight = latest[f"权重_{name}"] if f"权重_{name}" in latest else 0
             code = next((p.code for p in strategy.pool if p.name == name), "")
             last_date = last_quote_dates.get(name, "-") if last_quote_dates else "-"
-            scores.append((name, code, last_date, score, weight))
+            vol = vol_map.get(name, np.nan)
+            # 使用每只 ETF 单独记录的风控原因；没有原因且权重为 0 的视为未入选
+            per_etf_reason = str(latest.get(f"风控原因_{name}", ""))
+            if weight > 0:
+                reason = ""
+            elif per_etf_reason:
+                reason = per_etf_reason
+            else:
+                reason = "未入选"
+            scores.append((name, code, last_date, score, vol, weight, reason))
 
         scores.sort(key=lambda x: x[3] if not pd.isna(x[3]) else -np.inf, reverse=True)
 
-        for i, (name, code, last_date, score, weight) in enumerate(scores, 1):
+        for i, (name, code, last_date, score, vol, weight, reason) in enumerate(scores, 1):
             marker = "★" if weight > 0 else " "
             weight_pct = f"{weight*100:.0f}%" if weight > 0 else "0%"
             if pd.isna(score):
@@ -481,6 +507,7 @@ def print_latest_signal(
                 score_str = f"{score:+.2%}"
             else:
                 score_str = f"{score:.4f}"
+            vol_str = f"{vol:.1%}" if not pd.isna(vol) else "-"
             rank_str = f"{marker}{i}"
             row = (
                 f"{_ljust(rank_str, 4)} "
@@ -488,7 +515,9 @@ def print_latest_signal(
                 f"{_ljust(code, 10)} "
                 f"{_ljust(last_date, 12)} "
                 f"{_ljust(score_str, 12)} "
-                f"{_ljust(weight_pct, 10)}"
+                f"{_ljust(vol_str, 10)} "
+                f"{_ljust(weight_pct, 10)} "
+                f"{_ljust(reason, 12)}"
             )
             print(row)
 
@@ -511,44 +540,6 @@ def print_latest_signal(
                     print(f"  [卖出] {name} ({code})")
             if not added and not removed:
                 print("  [维持] 持仓不变")
-
-        print(f"\n{'-'*60}")
-        print("风控提醒:")
-        risk_control = strategy.params.get("risk_control", {})
-        enabled_layers = []
-        if risk_control.get("layer1", {}).get("enabled"):
-            cfg = risk_control["layer1"]
-            enabled_layers.append(
-                f"Layer1 时序动量(ma={cfg.get('ma_lookback', 20)}, "
-                f"回撤>{cfg.get('drawdown_threshold', 0.05):.1%})"
-            )
-        if risk_control.get("layer2", {}).get("enabled"):
-            cfg = risk_control["layer2"]
-            enabled_layers.append(
-                f"Layer2 ATR止损({cfg.get('atr_multiplier', 3.0)}*ATR, "
-                f"lookback={cfg.get('atr_lookback', 14)})"
-            )
-        if risk_control.get("layer3", {}).get("enabled"):
-            cfg = risk_control["layer3"]
-            enabled_layers.append(
-                f"Layer3 波动率平准(target={cfg.get('target_vol', 0.08):.1%}, "
-                f"comfort={cfg.get('comfort_zone', 0.15):.1%}, "
-                f"caution={cfg.get('caution_zone', 0.25):.1%})"
-            )
-        if enabled_layers:
-            print(f"  · 已启用: {' | '.join(enabled_layers)}")
-        else:
-            print("  · 未启用任何风控层")
-
-        risk_reason = latest.get("风控原因", "")
-        if risk_reason:
-            print("  · 最新信号日触发以下风控，建议仓位已据此调整:")
-            for reason in str(risk_reason).split(";"):
-                reason = reason.strip()
-                if reason:
-                    print(f"    - {reason}")
-        else:
-            print("  · 最新信号日未触发风控，建议持仓由原始评分/动量决定")
 
         print(f"{'='*60}")
         print("操作建议:")

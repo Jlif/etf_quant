@@ -194,6 +194,9 @@ def run(
 
     # 初始化风控原因列，用于记录每个过滤器对持仓的调整
     df["风控原因"] = ""
+    # 每只 ETF 单独记录被哪一层风控清零/压缩，供最新信号打印使用
+    for name in name_list:
+        df[f"风控原因_{name}"] = ""
 
     # 3.05–3.7 三层风控系统
     risk_control = params.get("risk_control", {})
@@ -222,7 +225,7 @@ def run(
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
 
-        # 记录触发第一层的风控日
+        # 记录触发第一层的风控日（组合级字符串）
         risk_cols = [c for c in weight_cols if c != f"权重_{safe_haven}"]
         triggered = (pre_weights[risk_cols].sum(axis=1) > 0) & (
             df[f"权重_{safe_haven}"] >= 0.999
@@ -232,6 +235,15 @@ def run(
                 f"第一层: 组合趋势/回撤过滤(跌破{ma_lookback}日均线或"
                 f"{drawdown_lookback}日高点回撤>{drawdown_threshold:.1%}); "
             )
+            # 记录每只被清零的风险资产
+            for name in name_list:
+                if name == safe_haven:
+                    continue
+                etf_triggered = triggered & (pre_weights[f"权重_{name}"] > 0) & (
+                    df[f"权重_{name}"] == 0
+                )
+                if etf_triggered.any():
+                    df.loc[etf_triggered, f"风控原因_{name}"] = "L1"
 
     # 3.6 第二层：ATR 跟踪止损拦截
     layer2 = risk_control.get("layer2", {})
@@ -262,6 +274,7 @@ def run(
                 df.loc[triggered, "风控原因"] += (
                     f"{name}: ATR跟踪止损(回落>{atr_multiplier}*ATR); "
                 )
+                df.loc[triggered, f"风控原因_{name}"] = "L2"
 
     # 3.7 第三层：目标波动率平准（非线性）
     layer3 = risk_control.get("layer3", {})
@@ -301,6 +314,14 @@ def run(
             df.loc[panic, "风控原因"] += (
                 f"Layer3: 波动率熔断(组合波动≥{caution_zone:.1%})，风险资产强制清仓; "
             )
+            for name in name_list:
+                if name == safe_haven:
+                    continue
+                etf_panic = panic & (pre_weights[f"权重_{name}"] > 0) & (
+                    df[f"权重_{name}"] == 0
+                )
+                if etf_panic.any():
+                    df.loc[etf_panic, f"风控原因_{name}"] = "L3"
 
         caution = (pre_risk_weight > post_risk_weight) & (post_risk_weight > 0)
         if caution.any():
@@ -322,6 +343,8 @@ def run(
     # 风控原因也随持仓前移1天，使其与风控实际生效当日的持仓对齐，
     # 避免“当天显示触发止损但当天持仓仍是旧仓位”的误解。
     df["风控原因"] = df["风控原因"].shift(1).fillna("")
+    for name in name_list:
+        df[f"风控原因_{name}"] = df[f"风控原因_{name}"].shift(1).fillna("")
 
     # 权重为 0 时，该 ETF 的收益贡献应为 0；把收益列中的 NaN 填 0
     # 避免 0 * NaN = NaN 污染策略日收益率。

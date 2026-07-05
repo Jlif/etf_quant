@@ -74,7 +74,8 @@ strategies:
     enabled: true
     mode: rotation
     pool:
-      - { code: "510300", name: "沪深300ETF", type: "宽基" }
+      - { code: "512040", name: "价值100ETF富国", type: "价值" }
+      # - { code: "510300", name: "沪深300ETF", type: "宽基" }
       - { code: "159361", name: "A500ETF易方达", type: "宽基" }
       - { code: "588080", name: "科创50ETF易方达", type: "宽基" }
       - { code: "159915", name: "创业板ETF", type: "宽基" }

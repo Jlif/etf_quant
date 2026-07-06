@@ -338,7 +338,14 @@ def run(
                     f"仓位压缩为{caution_scale:.0%}; "
                 )
 
-    # 4. 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
+    # 4. 保存原始信号日权重和风控原因，供“今日交易信号”展示使用。
+    #    回测收益仍使用 shift 后的持仓列，保持 T 日信号决定 T+1 日收益的逻辑。
+    for name in name_list:
+        df[f"信号权重_{name}"] = df[f"权重_{name}"]
+        df[f"信号风控原因_{name}"] = df[f"风控原因_{name}"]
+    df["信号风控原因"] = df["风控原因"]
+
+    # 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
     for name in name_list:
         df[f"权重_{name}"] = df[f"权重_{name}"].shift(1).fillna(0.0)
 

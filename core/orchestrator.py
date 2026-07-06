@@ -450,6 +450,7 @@ def print_latest_signal(
         scoring = strategy.params.get("scoring", "momentum")
         prefix = "得分_" if scoring == "slope_r2" else "涨幅_"
         lookback = strategy.params.get("lookback", 20)
+        top_n = strategy.params.get("top_n", 1)
 
         # 计算每只 ETF 的 lookback 日年化波动率
         vol_map = {}
@@ -472,35 +473,50 @@ def print_latest_signal(
             f"{_ljust('最新行情日', 12)} "
             f"{_ljust('周期动量得分', 12)} "
             f"{_ljust('波动率', 10)} "
-            f"{_ljust('建议仓位', 10)} "
+            f"{_ljust('目前持仓仓位', 12)} "
+            f"{_ljust('建议下日仓位', 12)} "
             f"{_ljust('未入选原因', 12)}"
         )
         print(header)
-        print("-" * 96)
+        print("-" * 112)
 
         scores = []
         for name in name_list:
             score_col = f"{prefix}{name}"
             score = latest[score_col] if score_col in latest else np.nan
-            weight = latest[f"权重_{name}"] if f"权重_{name}" in latest else 0
+            # 目前持仓仓位：shift 后的实际持仓
+            current_weight = latest[f"权重_{name}"] if f"权重_{name}" in latest else 0
+            # 建议下一交易日仓位：按最新日信号重新计算后的原始权重
+            signal_weight_col = f"信号权重_{name}"
+            signal_weight = (
+                latest[signal_weight_col]
+                if signal_weight_col in latest
+                else current_weight
+            )
             code = next((p.code for p in strategy.pool if p.name == name), "")
             last_date = last_quote_dates.get(name, "-") if last_quote_dates else "-"
             vol = vol_map.get(name, np.nan)
-            # 使用每只 ETF 单独记录的风控原因；没有原因且权重为 0 的视为未入选
-            per_etf_reason = str(latest.get(f"风控原因_{name}", ""))
-            if weight > 0:
+            # 未入选原因对应“建议下一交易日仓位”的风控原因
+            signal_reason_col = f"信号风控原因_{name}"
+            per_etf_reason = str(
+                latest.get(signal_reason_col)
+                if signal_reason_col in latest
+                else latest.get(f"风控原因_{name}", "")
+            )
+            if signal_weight > 0:
                 reason = ""
             elif per_etf_reason:
                 reason = per_etf_reason
             else:
-                reason = "未入选"
-            scores.append((name, code, last_date, score, vol, weight, reason))
+                reason = f"未进top{top_n}"
+            scores.append((name, code, last_date, score, vol, current_weight, signal_weight, reason))
 
         scores.sort(key=lambda x: x[3] if not pd.isna(x[3]) else -np.inf, reverse=True)
 
-        for i, (name, code, last_date, score, vol, weight, reason) in enumerate(scores, 1):
-            marker = "★" if weight > 0 else " "
-            weight_pct = f"{weight*100:.0f}%" if weight > 0 else "0%"
+        for i, (name, code, last_date, score, vol, current_weight, signal_weight, reason) in enumerate(scores, 1):
+            marker = "★" if signal_weight > 0 else " "
+            current_weight_pct = f"{current_weight*100:.0f}%" if current_weight > 0 else "0%"
+            signal_weight_pct = f"{signal_weight*100:.0f}%" if signal_weight > 0 else "0%"
             if pd.isna(score):
                 score_str = "-"
             elif scoring == "momentum":
@@ -516,7 +532,8 @@ def print_latest_signal(
                 f"{_ljust(last_date, 12)} "
                 f"{_ljust(score_str, 12)} "
                 f"{_ljust(vol_str, 10)} "
-                f"{_ljust(weight_pct, 10)} "
+                f"{_ljust(current_weight_pct, 12)} "
+                f"{_ljust(signal_weight_pct, 12)} "
                 f"{_ljust(reason, 12)}"
             )
             print(row)
@@ -543,7 +560,10 @@ def print_latest_signal(
 
         print(f"{'='*60}")
         print("操作建议:")
-        holdings = [(name, latest[f"权重_{name}"]) for name in name_list if latest[f"权重_{name}"] > 0]
+        signal_weight_col = f"信号权重_{name_list[0]}"
+        has_signal_weight = signal_weight_col in result.columns
+        weight_prefix = "信号权重_" if has_signal_weight else "权重_"
+        holdings = [(name, latest[f"{weight_prefix}{name}"]) for name in name_list if latest[f"{weight_prefix}{name}"] > 0]
         for name, weight in holdings:
             code = next((p.code for p in strategy.pool if p.name == name), "")
             print(f"  持有 {name} ({code}): {weight*100:.0f}%")

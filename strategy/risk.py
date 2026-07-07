@@ -226,83 +226,53 @@ def layer1_market_filter(
     drawdown_threshold: float,
     safe_haven: str,
     drawdown_lookback: int = 252,
-) -> tuple[pd.DataFrame, dict[str, pd.Series]]:
+) -> tuple[pd.DataFrame, dict[str, dict[str, pd.Series]]]:
     """
-    第一层：组合趋势/回撤过滤。
+    第一层：标的趋势/回撤过滤（标的级别）。
 
-    用当前持仓权重合成组合净值序列，当组合净值跌破 N 日均线，
-    或从过去 M 日高点回撤超过阈值时，强制清空所有风险资产仓位，
-    全部转入 safe_haven。
-
-    Parameters
-    ----------
-    weights_df : pd.DataFrame
-        列名为 "权重_{标的名称}" 的每日权重表。
-    close_df : pd.DataFrame
-        收盘价表，列名为标的名称。
-    ma_lookback : int
-        均线回望周期。
-    drawdown_threshold : float
-        回撤阈值，例如 0.10 表示从 M 日高点回撤 10% 即触发。
-    safe_haven : str
-        避风港标的名称。
-    drawdown_lookback : int, optional
-        计算回撤高点时使用的滚动窗口（交易日），默认 252。
+    对每只风险资产独立判断：
+    - 价格跌破 N 日均线 → 清仓该标的
+    - 从 M 日高点回撤超过阈值 → 清仓该标的
+    触发的标的转入 safe_haven，未触发的标的不受影响。
 
     Returns
     -------
-    tuple[pd.DataFrame, dict[str, pd.Series]]
+    tuple[pd.DataFrame, dict]
         - 调整后的权重表（副本）
-        - 触发原因字典，包含 "ma" 和 "drawdown" 两个布尔 Series
+        - 触发原因字典：
+            "ma": {标的名称: bool Series}  每只标的的均线触发
+            "drawdown": {标的名称: bool Series}  每只标的的回撤触发
     """
     adjusted = weights_df.copy()
     weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
     name_list = [c.replace("权重_", "") for c in weight_cols]
-
-    # 合成组合净值序列：用持仓权重计算组合日收益，再累积为净值
-    # weights_df 为信号日权重（T 日权重决定 T+1 日持仓），因此用 shift(1) 与 T 日收益对齐
-    returns = close_df.pct_change(fill_method=None)
-    portfolio_returns = pd.Series(0.0, index=adjusted.index)
-    for name in name_list:
-        portfolio_returns += weights_df[f"权重_{name}"].shift(1) * returns[name]
-    portfolio_value = (1.0 + portfolio_returns.fillna(0)).cumprod()
-
-    ma = portfolio_value.rolling(ma_lookback).mean()
-    peak = portfolio_value.rolling(drawdown_lookback, min_periods=1).max()
-    drawdown = (portfolio_value - peak) / peak
-
-    ma_triggered = portfolio_value < ma
-    drawdown_triggered = drawdown < -drawdown_threshold
-    triggered = ma_triggered | drawdown_triggered
-    if not triggered.any():
-        ma_diff_pct = ((portfolio_value - ma) / ma).fillna(0.0)
-        return adjusted, {
-            "ma": ma_triggered,
-            "drawdown": drawdown_triggered,
-            "portfolio_value": portfolio_value,
-            "ma_value": ma,
-            "ma_diff_pct": ma_diff_pct,
-        }
-
-    risk_cols = [c for c in weight_cols if c != f"权重_{safe_haven}"]
+    risk_names = [n for n in name_list if n != safe_haven]
     safe_col = f"权重_{safe_haven}"
 
-    # 触发日：风险资产全部转给 safe_haven
-    for col in risk_cols:
-        adjusted.loc[triggered, safe_col] += adjusted.loc[triggered, col]
-        adjusted.loc[triggered, col] = 0.0
+    ma_triggered: dict[str, pd.Series] = {}
+    dd_triggered: dict[str, pd.Series] = {}
+
+    for name in risk_names:
+        price = close_df[name]
+        ma = price.rolling(ma_lookback).mean()
+        peak = price.rolling(drawdown_lookback, min_periods=1).max()
+        drawdown = (price - peak) / peak
+
+        ma_trig = price < ma
+        dd_trig = drawdown < -drawdown_threshold
+        triggered = ma_trig | dd_trig
+
+        ma_triggered[name] = ma_trig
+        dd_triggered[name] = dd_trig
+
+        if triggered.any():
+            adjusted.loc[triggered, safe_col] += adjusted.loc[triggered, f"权重_{name}"]
+            adjusted.loc[triggered, f"权重_{name}"] = 0.0
 
     # 归一化，避免浮点误差导致权重和不为 1
     total = adjusted[weight_cols].sum(axis=1)
     adjusted = adjusted.div(total, axis=0).fillna(0.0)
-    ma_diff_pct = ((portfolio_value - ma) / ma).fillna(0.0)
-    return adjusted, {
-        "ma": ma_triggered,
-        "drawdown": drawdown_triggered,
-        "portfolio_value": portfolio_value,
-        "ma_value": ma,
-        "ma_diff_pct": ma_diff_pct,
-    }
+    return adjusted, {"ma": ma_triggered, "drawdown": dd_triggered}
 
 
 def layer2_atr_trailing_stop(
@@ -407,37 +377,17 @@ def layer3_vol_target_filter(
     transition_power: float | None = None,
 ) -> pd.DataFrame:
     """
-    第三层：目标波动率平准（非线性/平滑）。
+    第三层：标的波动率平准（标的级别，非线性/平滑）。
 
-    计算组合 EWMA 年化波动率，按分段函数缩放风险资产仓位：
+    对每只风险资产独立计算其 EWMA 年化波动率，按分段函数缩放该标的仓位：
     - 波动率 < comfort_zone：线性缩放（target_vol / realized_vol），上限 1.0
     - comfort_zone <= 波动率 < caution_zone：
-        - 若 transition_power 为 None：线性结果 * caution_scale（旧三段式）
-        - 若 transition_power 不为 None：使用幂函数平滑过渡，
+        - 若 transition_power 为 None：线性结果 * caution_scale（三段式）
+        - 若 transition_power 不为 None：幂函数平滑过渡，
           波动率越接近 caution_zone，仓位下降越快
     - 波动率 >= caution_zone：强制清零
 
-    Parameters
-    ----------
-    weights_df : pd.DataFrame
-        列名为 "权重_{标的名称}" 的每日权重表。
-    close_df : pd.DataFrame
-        收盘价表。
-    target_vol : float
-        目标年化波动率，例如 0.10 表示 10%。
-    vol_lookback : int
-        EWMA 波动率的 span 参数。
-    comfort_zone : float
-        舒适区波动率上限。
-    caution_zone : float
-        警惕区波动率上限。
-    caution_scale : float
-        警惕区仓位缩放系数（仅在 transition_power 为 None 时生效）。
-    safe_haven : str | None
-        减仓后承接资金的去向。若为 None 则空仓。
-    transition_power : float | None
-        平滑过渡曲线的幂指数。大于 1 时波动率越高压降越快；
-        为 None 时退化为旧版三段式。建议 2.0~4.0。
+    每只标的根据自己的波动率独立缩放，互不影响。
 
     Returns
     -------
@@ -453,38 +403,38 @@ def layer3_vol_target_filter(
     weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
     name_list = [c.replace("权重_", "") for c in weight_cols]
 
-    returns = close_df.pct_change(fill_method=None)
-    portfolio_returns = pd.Series(0.0, index=adjusted.index)
-    for name in name_list:
-        portfolio_returns += adjusted[f"权重_{name}"] * returns[name]
-
-    ewma_vol = portfolio_returns.ewm(span=vol_lookback).std() * np.sqrt(252)
-    linear_scale = (target_vol / ewma_vol).fillna(1.0).clip(upper=1.0)
-
-    scale = pd.Series(np.nan, index=ewma_vol.index)
-    mask_comfort = ewma_vol < comfort_zone
-    mask_caution = (ewma_vol >= comfort_zone) & (ewma_vol < caution_zone)
-    mask_panic = ewma_vol >= caution_zone
-
-    scale[mask_comfort] = linear_scale[mask_comfort]
-
-    if transition_power is not None:
-        # 平滑幂函数过渡：x=0 时 factor=1，x=1 时 factor=0
-        x = ((ewma_vol - comfort_zone) / (caution_zone - comfort_zone)).clip(lower=0.0, upper=1.0)
-        smooth_factor = 1.0 - x ** transition_power
-        scale[mask_caution] = linear_scale[mask_caution] * smooth_factor[mask_caution]
-    else:
-        scale[mask_caution] = linear_scale[mask_caution] * caution_scale
-
-    scale[mask_panic] = 0.0
-    scale = scale.fillna(1.0)
-
     if safe_haven and safe_haven in name_list:
         risk_names = [n for n in name_list if n != safe_haven]
     else:
         risk_names = name_list
 
+    returns = close_df.pct_change(fill_method=None)
+
     for name in risk_names:
+        asset_returns = returns[name]
+        ewma_vol = asset_returns.ewm(span=vol_lookback).std() * np.sqrt(252)
+        linear_scale = (target_vol / ewma_vol).fillna(1.0).clip(upper=1.0)
+
+        scale = pd.Series(np.nan, index=ewma_vol.index)
+        mask_comfort = ewma_vol < comfort_zone
+        mask_caution = (ewma_vol >= comfort_zone) & (ewma_vol < caution_zone)
+        mask_panic = ewma_vol >= caution_zone
+
+        scale[mask_comfort] = linear_scale[mask_comfort]
+
+        if transition_power is not None:
+            # 平滑幂函数过渡：x=0 时 factor=1，x=1 时 factor=0
+            x = ((ewma_vol - comfort_zone) / (caution_zone - comfort_zone)).clip(
+                lower=0.0, upper=1.0
+            )
+            smooth_factor = 1.0 - x ** transition_power
+            scale[mask_caution] = linear_scale[mask_caution] * smooth_factor[mask_caution]
+        else:
+            scale[mask_caution] = linear_scale[mask_caution] * caution_scale
+
+        scale[mask_panic] = 0.0
+        scale = scale.fillna(1.0)
+
         adjusted[f"权重_{name}"] *= scale
 
     if safe_haven and safe_haven in name_list:

@@ -201,7 +201,7 @@ def run(
     # 3.05–3.7 三层风控系统
     risk_control = params.get("risk_control", {})
 
-    # 3.05 第一层：组合趋势/回撤过滤
+    # 3.05 第一层：标的趋势/回撤过滤（标的级别）
     layer1 = risk_control.get("layer1", {})
     if layer1.get("enabled", False):
         safe_haven = params.get("safe_haven")
@@ -225,35 +225,36 @@ def run(
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
 
-        # 记录 L1 诊断数据：组合净值、均线、差值百分比
-        if "portfolio_value" in l1_triggers:
-            df["L1_组合净值"] = l1_triggers["portfolio_value"]
-        if "ma_value" in l1_triggers:
-            df["L1_均线"] = l1_triggers["ma_value"]
-        if "ma_diff_pct" in l1_triggers:
-            df["L1_净值偏离均线"] = l1_triggers["ma_diff_pct"]
-
-        # 记录触发第一层的风控日（组合级字符串）
-        triggered = l1_triggers["ma"] | l1_triggers["drawdown"]
-        if triggered.any():
-            df.loc[triggered, "风控原因"] += (
-                f"第一层: 组合趋势/回撤过滤(跌破{ma_lookback}日均线或"
-                f"{drawdown_lookback}日高点回撤>{drawdown_threshold:.1%}); "
-            )
-            # 记录每只被清零的风险资产，并细分均线/回撤原因
-            for name in name_list:
-                if name == safe_haven:
-                    continue
-                etf_triggered = triggered & (pre_weights[f"权重_{name}"] > 0) & (
-                    df[f"权重_{name}"] == 0
+        # 标的级别：逐只记录被清零的风险资产，细分均线/回撤原因
+        for name in name_list:
+            if name == safe_haven:
+                continue
+            ma_trig = l1_triggers["ma"].get(name)
+            dd_trig = l1_triggers["drawdown"].get(name)
+            if ma_trig is None or dd_trig is None:
+                continue
+            etf_triggered = (pre_weights[f"权重_{name}"] > 0) & (df[f"权重_{name}"] == 0)
+            if not etf_triggered.any():
+                continue
+            ma_only = etf_triggered & ma_trig & ~dd_trig
+            dd_only = etf_triggered & ~ma_trig & dd_trig
+            both = etf_triggered & ma_trig & dd_trig
+            if ma_only.any():
+                df.loc[ma_only, "风控原因"] += (
+                    f"{name}: L1标的均线(跌破{ma_lookback}日均线); "
                 )
-                if etf_triggered.any():
-                    ma_only = etf_triggered & l1_triggers["ma"] & ~l1_triggers["drawdown"]
-                    dd_only = etf_triggered & ~l1_triggers["ma"] & l1_triggers["drawdown"]
-                    both = etf_triggered & l1_triggers["ma"] & l1_triggers["drawdown"]
-                    df.loc[ma_only, f"风控原因_{name}"] = "L1-组合均线"
-                    df.loc[dd_only, f"风控原因_{name}"] = "L1-组合回撤"
-                    df.loc[both, f"风控原因_{name}"] = "L1-组合均线+回撤"
+                df.loc[ma_only, f"风控原因_{name}"] = "L1-标的均线"
+            if dd_only.any():
+                df.loc[dd_only, "风控原因"] += (
+                    f"{name}: L1标的回撤({drawdown_lookback}日高点回撤>{drawdown_threshold:.1%}); "
+                )
+                df.loc[dd_only, f"风控原因_{name}"] = "L1-标的回撤"
+            if both.any():
+                df.loc[both, "风控原因"] += (
+                    f"{name}: L1标的均线+回撤(跌破{ma_lookback}日均线且"
+                    f"{drawdown_lookback}日高点回撤>{drawdown_threshold:.1%}); "
+                )
+                df.loc[both, f"风控原因_{name}"] = "L1-标的均线+回撤"
 
     # 3.6 第二层：ATR 跟踪止损拦截
     layer2 = risk_control.get("layer2", {})
@@ -286,7 +287,7 @@ def run(
                 )
                 df.loc[triggered, f"风控原因_{name}"] = "L2"
 
-    # 3.7 第三层：目标波动率平准（非线性）
+    # 3.7 第三层：标的波动率平准（标的级别，非线性）
     layer3 = risk_control.get("layer3", {})
     if layer3.get("enabled", False):
         safe_haven = params.get("safe_haven")
@@ -314,37 +315,33 @@ def run(
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
 
-        # 区分“警惕区（仓位压缩）”和“熔断区（强制清仓）”，写出明确的风控原因
-        risk_cols = [f"权重_{n}" for n in name_list if n != safe_haven]
-        pre_risk_weight = pre_weights[risk_cols].sum(axis=1)
-        post_risk_weight = df[risk_cols].sum(axis=1)
-
-        panic = (pre_risk_weight > 0) & (post_risk_weight == 0)
-        if panic.any():
-            df.loc[panic, "风控原因"] += (
-                f"Layer3: 波动率熔断(组合波动≥{caution_zone:.1%})，风险资产强制清仓; "
-            )
-            for name in name_list:
-                if name == safe_haven:
-                    continue
-                etf_panic = panic & (pre_weights[f"权重_{name}"] > 0) & (
-                    df[f"权重_{name}"] == 0
+        # 标的级别：逐只判断是熔断（清零）还是压缩（降仓但未清零）
+        for name in name_list:
+            if name == safe_haven:
+                continue
+            pre_w = pre_weights[f"权重_{name}"]
+            post_w = df[f"权重_{name}"]
+            # 熔断：有仓变无仓
+            panic = (pre_w > 0) & (post_w == 0)
+            if panic.any():
+                df.loc[panic, "风控原因"] += (
+                    f"{name}: L3波动率熔断(标的波动≥{caution_zone:.1%}); "
                 )
-                if etf_panic.any():
-                    df.loc[etf_panic, f"风控原因_{name}"] = "L3"
-
-        caution = (pre_risk_weight > post_risk_weight) & (post_risk_weight > 0)
-        if caution.any():
-            if transition_power is not None:
-                df.loc[caution, "风控原因"] += (
-                    f"Layer3: 波动率警惕(组合波动{comfort_zone:.1%}~{caution_zone:.1%})，"
-                    f"仓位平滑压缩(power={transition_power}); "
-                )
-            else:
-                df.loc[caution, "风控原因"] += (
-                    f"Layer3: 波动率警惕(组合波动{comfort_zone:.1%}~{caution_zone:.1%})，"
-                    f"仓位压缩为{caution_scale:.0%}; "
-                )
+                df.loc[panic, f"风控原因_{name}"] = "L3-波动率熔断"
+            # 压缩：有仓且降仓但未清零
+            caution = (pre_w > post_w) & (post_w > 0)
+            if caution.any():
+                if transition_power is not None:
+                    df.loc[caution, "风控原因"] += (
+                        f"{name}: L3波动率警惕(标的波动{comfort_zone:.1%}~{caution_zone:.1%})，"
+                        f"仓位平滑压缩(power={transition_power}); "
+                    )
+                else:
+                    df.loc[caution, "风控原因"] += (
+                        f"{name}: L3波动率警惕(标的波动{comfort_zone:.1%}~{caution_zone:.1%})，"
+                        f"仓位压缩为{caution_scale:.0%}; "
+                    )
+                df.loc[caution, f"风控原因_{name}"] = "L3-波动率压缩"
 
     # 4. 保存原始信号日权重和风控原因，供“今日交易信号”展示使用。
     #    回测收益仍使用 shift 后的持仓列，保持 T 日信号决定 T+1 日收益的逻辑。

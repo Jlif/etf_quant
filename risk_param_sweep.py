@@ -421,33 +421,33 @@ def main():
     )
     parser.add_argument(
         "--l1-ma-lookbacks",
-        default="11",
-        help="Layer1 均线回望周期列表，逗号分隔",
+        default="12",
+        help="Layer1 均线回望周期列表（标的级别，单只ETF价格均线），逗号分隔",
     )
     parser.add_argument(
         "--l1-drawdown-lookbacks",
-        default="5",
-        help="Layer1 回撤回望周期列表，逗号分隔",
+        default="38",
+        help="Layer1 回撤回望周期列表（标的级别，单只ETF回撤窗口），逗号分隔",
     )
     parser.add_argument(
         "--l1-drawdown-thresholds",
-        default="0.25",
-        help="Layer1 回撤阈值列表，逗号分隔",
+        default="0.12",
+        help="Layer1 回撤阈值列表（标的级别，单只ETF从高点回撤），逗号分隔",
     )
     parser.add_argument(
         "--l2-atr-multipliers",
-        default="3.7",
+        default="2",
         help="Layer2 ATR 乘数列表，逗号分隔",
     )
     parser.add_argument(
         "--l2-atr-lookbacks",
-        default="20",
+        default="13",
         help="Layer2 ATR 回望周期列表，逗号分隔",
     )
     parser.add_argument(
         "--l3-target-vols",
-        default="0.3",
-        help="Layer3 目标波动率列表，逗号分隔",
+        default="0.25",
+        help="Layer3 目标波动率列表（标的级别，单只ETF目标波动率），逗号分隔",
     )
     parser.add_argument(
         "--l3-vol-lookbacks",
@@ -456,13 +456,13 @@ def main():
     )
     parser.add_argument(
         "--l3-comfort-zones",
-        default="0.25",
-        help="Layer3 舒适区波动率上限列表，逗号分隔",
+        default="0.3",
+        help="Layer3 舒适区波动率上限列表（标的级别），逗号分隔",
     )
     parser.add_argument(
         "--l3-caution-zones",
         default="0.4",
-        help="Layer3 警惕区波动率上限列表，逗号分隔",
+        help="Layer3 警惕区波动率上限列表（标的级别，行业ETF波动可达40-50%），逗号分隔",
     )
     parser.add_argument(
         "--l3-caution-scales",

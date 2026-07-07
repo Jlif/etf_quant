@@ -348,10 +348,13 @@ def run(
 
     # 4. 保存原始信号日权重和风控原因，供“今日交易信号”展示使用。
     #    回测收益仍使用 shift 后的持仓列，保持 T 日信号决定 T+1 日收益的逻辑。
-    for name in name_list:
-        df[f"信号权重_{name}"] = df[f"权重_{name}"]
-        df[f"信号风控原因_{name}"] = df[f"风控原因_{name}"]
-    df["信号风控原因"] = df["风控原因"]
+    #    批量 concat 新增列，避免逐列 insert 导致 DataFrame 碎片化（PerformanceWarning）。
+    _signal_cols = {f"信号权重_{name}": df[f"权重_{name}"] for name in name_list}
+    _signal_cols.update(
+        {f"信号风控原因_{name}": df[f"风控原因_{name}"] for name in name_list}
+    )
+    _signal_cols["信号风控原因"] = df["风控原因"]
+    df = pd.concat([df, pd.DataFrame(_signal_cols, index=df.index)], axis=1)
 
     # 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
     for name in name_list:

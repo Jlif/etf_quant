@@ -451,7 +451,7 @@ def main():
     )
     parser.add_argument(
         "--l3-vol-lookbacks",
-        default="74,75,76,77,78,79",
+        default="75",
         help="Layer3 波动率回望周期列表，逗号分隔",
     )
     parser.add_argument(

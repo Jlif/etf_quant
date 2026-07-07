@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import unicodedata
 from datetime import datetime, timedelta
@@ -158,6 +159,10 @@ def fetch_pool_data(
     all_low = {}
     actual_starts = {}
 
+    # 第一遍：检查缓存，记录需要下载的
+    cached_dfs = {}       # code -> df（缓存足够）
+    download_tasks = []   # [(code, cache_file, meta_file, df_cached), ...]
+    
     for code in codes:
         name = names[code]
         cache_file = os.path.join(cache_dir, f"{code}_{data_source.name}.csv")
@@ -179,9 +184,7 @@ def fetch_pool_data(
                         meta = json.load(f)
                     data_source.adjusted = meta.get("adjusted", True)
 
-                # 检查缓存是否覆盖目标起始日（允许 30 天容差，处理节假日/非交易日）
                 cache_covers_start = df.index[0] <= target_start_dt + timedelta(days=30)
-                # 若传了 cutoff_date，检查缓存是否覆盖到截止日且条数足够
                 if cutoff_date is not None:
                     df_before = _filter_by_cutoff(df, cutoff_date)
                     last_date = df_before.index[-1] if not df_before.empty else None
@@ -192,7 +195,7 @@ def fetch_pool_data(
                     if cache_covers_start and cache_reaches_cutoff and enough_bars:
                         if not silent:
                             print(f"  [缓存] {code} ({name}) 已是最新")
-                        df = df_before
+                        cached_dfs[code] = df_before
                         cache_sufficient = True
                     elif not cache_covers_start and not silent:
                         print(
@@ -213,6 +216,7 @@ def fetch_pool_data(
                     if cache_covers_start:
                         if not silent:
                             print(f"  [缓存] {code} ({name})")
+                        cached_dfs[code] = df
                         cache_sufficient = True
                     elif not silent:
                         print(
@@ -221,44 +225,72 @@ def fetch_pool_data(
                         )
 
         if not cache_sufficient:
+            download_tasks.append((code, cache_file, meta_file, df))
+    
+    # 并发下载需要更新的 ETF（最多 5 个并发）
+    downloaded_dfs = {}
+    if download_tasks:
+        if not silent and len(download_tasks) > 1:
+            print(f"  [并发下载] {len(download_tasks)} 个 ETF...")
+        
+        def _download_one(code, cache_file, meta_file, df_cached):
+            """下载单个 ETF"""
+            name = names[code]
             action = "刷新" if include_today and os.path.exists(cache_file) else "下载"
             if not silent:
                 print(f"  [{action}] {code} ({name}) via {data_source.name}")
             try:
                 df_new = data_source.fetch(code, target_start)
-                # 与已有缓存合并，避免 latest_signal 用短历史覆盖长缓存
                 if os.path.exists(cache_file):
                     df_old = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-                    df = _merge_price_data(df_old, df_new)
+                    df_result = _merge_price_data(df_old, df_new)
                 else:
-                    df = df_new.copy()
-                df.to_csv(cache_file)
+                    df_result = df_new.copy()
+                df_result.to_csv(cache_file)
                 with open(meta_file, "w", encoding="utf-8") as f:
                     json.dump({"adjusted": data_source.adjusted}, f)
-                if not silent and cutoff_date is not None:
-                    print(
-                        f"  [缓存] {code} ({name}) 已合并并保存，"
-                        f"最新 {df.index[-1].date()}"
-                    )
+                return (code, df_result, None)
             except Exception as e:
-                if not silent:
-                    error_msg = str(e)
-                    if "RemoteDisconnected" in error_msg:
-                        print(f"  [警告] {code} ({name}) 网络连接失败，尝试回退缓存")
-                    elif "腾讯接口" in error_msg:
-                        tencent_msg = error_msg.split("腾讯接口")[-1].strip()
-                        print(f"  [警告] {code} ({name}) 腾讯接口{tencent_msg}，尝试回退缓存")
-                    else:
-                        print(f"  [警告] {code} ({name}) 下载失败: {error_msg[:100]}")
-                if os.path.exists(cache_file):
-                    df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                return (code, df_cached, e)
+        
+        with ThreadPoolExecutor(max_workers=min(2, len(download_tasks))) as executor:
+            futures = [
+                executor.submit(_download_one, code, cache_file, meta_file, df_cached)
+                for code, cache_file, meta_file, df_cached in download_tasks
+            ]
+            for future in as_completed(futures):
+                code, df_result, error = future.result()
+                name = names[code]
+                if error:
                     if not silent:
-                        print(f"  [回退] 使用缓存数据: {code} ({name})")
-                else:
-                    raise
+                        error_msg = str(error)
+                        if "RemoteDisconnected" in error_msg:
+                            print(f"  [警告] {code} ({name}) 网络连接失败，尝试回退缓存")
+                        elif "腾讯接口" in error_msg:
+                            tencent_msg = error_msg.split("腾讯接口")[-1].strip()
+                            print(f"  [警告] {code} ({name}) 腾讯接口{tencent_msg}，尝试回退缓存")
+                        else:
+                            print(f"  [警告] {code} ({name}) 下载失败: {error_msg[:100]}")
+                    cache_file = next(cf for c, cf, _, _ in download_tasks if c == code)
+                    if os.path.exists(cache_file):
+                        df_result = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                        if not silent:
+                            print(f"  [回退] 使用缓存数据: {code} ({name})")
+                    else:
+                        raise error
+                downloaded_dfs[code] = df_result
 
-        # 按 cutoff_date 过滤
-        if cutoff_date is not None and df is not None and not df.empty and not cache_sufficient:
+    # 第二遍：从缓存或下载结果中读取数据
+    for code in codes:
+        name = names[code]
+        # 注意：不能用 `or`，因为 bool(DataFrame) 会抛
+        # ValueError: truth value of a DataFrame is ambiguous
+        df = cached_dfs.get(code)
+        if df is None:
+            df = downloaded_dfs.get(code)
+
+        # 按 cutoff_date 过滤（仅对新下载的）
+        if code in downloaded_dfs and cutoff_date is not None and df is not None and not df.empty:
             df_before = _filter_by_cutoff(df, cutoff_date)
             if not silent and len(df_before) < len(df):
                 print(
@@ -285,7 +317,7 @@ def fetch_pool_data(
             all_high[name] = df[code]
             all_low[name] = df[code]
         else:
-            raise ValueError(f"{cache_file} 中未找到 {close_col} 或 {code} 列")
+            raise ValueError(f"未找到 {close_col} 或 {code} 列")
 
         actual_starts[name] = df.index[0]
 

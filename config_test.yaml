@@ -1,0 +1,23 @@
+data_source:
+  provider: akshare
+
+backtest:
+  start_date: "20240101"
+  cache_dir: "./data_cache"
+
+strategies:
+  - name: "测试策略"
+    description: "只使用有缓存的ETF"
+    enabled: true
+    mode: rotation
+    pool:
+      - { code: "512040", name: "价值100ETF富国", type: "价值" }
+      - { code: "159361", name: "A500ETF易方达", type: "宽基" }
+      - { code: "588080", name: "科创50ETF易方达", type: "宽基" }
+      - { code: "159915", name: "创业板ETF", type: "宽基" }
+      - { code: "513500", name: "标普500ETF博时", type: "宽基" }
+    params:
+      lookback: 20
+      scoring: momentum
+      top_n: 2
+      dynamic_pool: true

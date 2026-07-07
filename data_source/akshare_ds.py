@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 import time
+import threading
 
 import pandas as pd
 import requests
 
 from .base import BaseDataSource
+
+# ---------------------------------------------------------------------------
+# mini_racer (V8) 并发安全：akshare 的新浪接口 fund_etf_hist_sina 内部使用
+# py_mini_racer 执行 JS 解密。V8 的 AddressPoolManager 在多线程同时初始化
+# isolate 时存在竞态，会触发致命崩溃：
+#     [FATAL:address_pool_manager.cc(67)] Check failed: !pool->IsInitialized().
+# 由于 orchestrator 会用 ThreadPoolExecutor 并发下载多个 ETF，必须用一个
+# 进程级锁串行化 mini_racer 的使用（已验证可消除该崩溃）。
+# 注意：东方财富 fund_etf_hist_em 与腾讯接口均为纯 HTTP，不涉及 mini_racer，
+# 仍可并发，不受此锁影响。
+# ---------------------------------------------------------------------------
+_MINI_RACER_LOCK = threading.Lock()
 
 
 class AkshareDataSource(BaseDataSource):
@@ -45,7 +58,7 @@ class AkshareDataSource(BaseDataSource):
                 "最低": f"{code}_low",
                 "收盘": f"{code}_close",
             }
-        )
+                )
 
     def _fetch_tencent(self, code: str, start: str, end: str | None) -> pd.DataFrame:
         """腾讯数据源（东方财富失败时 fallback，按年份分段获取前复权数据）。"""
@@ -63,7 +76,7 @@ class AkshareDataSource(BaseDataSource):
                 "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
                 f"?param={symbol},day,{year_start},{year_end},1000,qfq"
             )
-            r = requests.get(url, timeout=30)
+            r = requests.get(url, timeout=8)
             r.raise_for_status()
             payload = r.json()
 
@@ -79,7 +92,7 @@ class AkshareDataSource(BaseDataSource):
             all_rows.extend(raw)
             # 温和限速，避免对腾讯接口造成压力
             if year < end_year:
-                time.sleep(0.05)
+                time.sleep(0.01)  # 减少限速延迟
 
         # 腾讯格式：[date, open, close, high, low, volume]
         df = pd.DataFrame(all_rows, columns=["date", "open", "close", "high", "low", "volume"])
@@ -116,7 +129,10 @@ class AkshareDataSource(BaseDataSource):
         import akshare as ak
 
         symbol = self._to_exchange_symbol(code)
-        df = ak.fund_etf_hist_sina(symbol=symbol)
+        # fund_etf_hist_sina 内部用 py_mini_racer 执行 JS 解密，并发会触发 V8
+        # AddressPoolManager 崩溃，故用进程级锁串行化该调用。
+        with _MINI_RACER_LOCK:
+            df = ak.fund_etf_hist_sina(symbol=symbol)
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date").sort_index()
         df = df[["open", "high", "low", "close"]].astype(float).rename(

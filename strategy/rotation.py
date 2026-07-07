@@ -225,6 +225,14 @@ def run(
         for name in name_list:
             df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
 
+        # 记录 L1 诊断数据：组合净值、均线、差值百分比
+        if "portfolio_value" in l1_triggers:
+            df["L1_组合净值"] = l1_triggers["portfolio_value"]
+        if "ma_value" in l1_triggers:
+            df["L1_均线"] = l1_triggers["ma_value"]
+        if "ma_diff_pct" in l1_triggers:
+            df["L1_净值偏离均线"] = l1_triggers["ma_diff_pct"]
+
         # 记录触发第一层的风控日（组合级字符串）
         triggered = l1_triggers["ma"] | l1_triggers["drawdown"]
         if triggered.any():

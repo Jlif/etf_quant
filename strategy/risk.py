@@ -275,7 +275,14 @@ def layer1_market_filter(
     drawdown_triggered = drawdown < -drawdown_threshold
     triggered = ma_triggered | drawdown_triggered
     if not triggered.any():
-        return adjusted, {"ma": ma_triggered, "drawdown": drawdown_triggered}
+        ma_diff_pct = ((portfolio_value - ma) / ma).fillna(0.0)
+        return adjusted, {
+            "ma": ma_triggered,
+            "drawdown": drawdown_triggered,
+            "portfolio_value": portfolio_value,
+            "ma_value": ma,
+            "ma_diff_pct": ma_diff_pct,
+        }
 
     risk_cols = [c for c in weight_cols if c != f"权重_{safe_haven}"]
     safe_col = f"权重_{safe_haven}"
@@ -288,7 +295,14 @@ def layer1_market_filter(
     # 归一化，避免浮点误差导致权重和不为 1
     total = adjusted[weight_cols].sum(axis=1)
     adjusted = adjusted.div(total, axis=0).fillna(0.0)
-    return adjusted, {"ma": ma_triggered, "drawdown": drawdown_triggered}
+    ma_diff_pct = ((portfolio_value - ma) / ma).fillna(0.0)
+    return adjusted, {
+        "ma": ma_triggered,
+        "drawdown": drawdown_triggered,
+        "portfolio_value": portfolio_value,
+        "ma_value": ma,
+        "ma_diff_pct": ma_diff_pct,
+    }
 
 
 def layer2_atr_trailing_stop(

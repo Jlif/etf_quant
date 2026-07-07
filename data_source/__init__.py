@@ -2,11 +2,9 @@
 
 from .base import BaseDataSource
 from .akshare_ds import AkshareDataSource
-from .yfinance_ds import YFinanceDataSource
 
 BUILTIN_SOURCES: dict[str, type[BaseDataSource]] = {
     "akshare": AkshareDataSource,
-    "yfinance": YFinanceDataSource,
 }
 
 
@@ -28,8 +26,8 @@ def get_data_source(
         是否跳过连通性测试。当本地缓存已存在时，可跳过测试以避免触发网络请求。
     """
     if name is None:
-        # 默认优先级: akshare -> yfinance
-        candidates = ["akshare", "yfinance"]
+        # 默认数据源: akshare
+        candidates = ["akshare"]
     else:
         candidates = [name]
 

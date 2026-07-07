@@ -15,7 +15,7 @@ class BaseDataSource(ABC):
     """最近一次 fetch 返回的价格是否为复权/已调整价格。"""
 
     @abstractmethod
-    def fetch(self, code: str, start: str, end: str | None = None) -> pd.DataFrame:
+    def fetch(self, code: str, start: str, end: str | None = None, expect_today: bool = False) -> pd.DataFrame:
         """
         获取单个 ETF 历史数据
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import threading
+from datetime import timedelta
 
 import pandas as pd
 import requests
@@ -22,9 +23,14 @@ from .base import BaseDataSource
 # ---------------------------------------------------------------------------
 _MINI_RACER_LOCK = threading.Lock()
 
+# _is_stale 容忍天数（未传 --today 时生效）：覆盖周末、节假日（春节/国庆最长约
+# 9 天休市）以及当日数据尚未生成的情况——默认只要求最近一个交易日的数据，
+# 避免因当天数据未出而误判滞后、无谓地切换数据源。
+STALE_TOLERANCE_DAYS = 9
+
 
 class AkshareDataSource(BaseDataSource):
-    """akshare 数据源：优先东方财富，失败后回退腾讯/新浪，最后 yfinance。"""
+    """akshare 数据源：优先东方财富，失败后回退腾讯/新浪。"""
 
     name = "akshare"
 
@@ -163,7 +169,8 @@ class AkshareDataSource(BaseDataSource):
         self.adjusted = False
         return df
 
-    def fetch(self, code: str, start: str, end: str | None = None) -> pd.DataFrame:
+    def fetch(self, code: str, start: str, end: str | None = None, expect_today: bool = False) -> pd.DataFrame:
+        # 主数据源：东方财富（前复权），成功直接返回，不做滞后判定
         try:
             return self._fetch_em(code, start, end)
         except Exception as e:
@@ -174,47 +181,43 @@ class AkshareDataSource(BaseDataSource):
             else:
                 print(f"  [akshare] 东方财富获取 {code} 失败: {error_msg[:80]}...，尝试腾讯...")
 
-        # 第一层 fallback：腾讯
-        df = None
-        try:
-            df = self._fetch_tencent(code, start, end)
-            if not self._is_stale(df, end):
-                return df
-            print(f"  [akshare] 腾讯数据滞后至 {df.index[-1].date()}，尝试新浪...")
-        except Exception as e:
-            print(f"  [akshare] 腾讯获取 {code} 失败: {e}，尝试新浪...")
+        # 回退链：腾讯(前复权) -> 新浪(未复权)
+        # expect_today=False 时 _is_stale 容忍若干天，默认只要求最近一个交易日的数据，
+        # 避免因当天数据未出而误判滞后、无谓切换数据源。
+        fallback_df = None        # 兜底数据（首个成功获取者，优先复权的腾讯）
+        fallback_adjusted = None  # 对应的复权状态
+        for label, fetcher in (("腾讯", self._fetch_tencent), ("新浪", self._fetch_sina)):
+            try:
+                df_cand = fetcher(code, start, end)
+            except Exception as e:
+                print(f"  [akshare] {label}获取 {code} 失败: {e}，尝试下一个数据源...")
+                continue
+            if not self._is_stale(df_cand, end, expect_today=expect_today):
+                print(f"  [akshare] 已使用{label}数据，最新 {df_cand.index[-1].date()}")
+                return df_cand
+            # 数据滞后（通常是当日数据尚未生成）：留作兜底。
+            # 首个成功者优先（腾讯复权优先于新浪未复权），避免被未复权数据覆盖。
+            if fallback_df is None:
+                fallback_df = df_cand
+                fallback_adjusted = self.adjusted
+            print(f"  [akshare] {label}数据最新 {df_cand.index[-1].date()}（可能为最近交易日），尝试下一个...")
 
-        # 第二层 fallback：新浪
-        try:
-            df = self._fetch_sina(code, start, end)
-            if not self._is_stale(df, end):
-                print(f"  [akshare] 已使用新浪数据，最新 {df.index[-1].date()}")
-                return df
-            print(f"  [akshare] 新浪数据滞后至 {df.index[-1].date()}，尝试 yfinance...")
-        except Exception as e:
-            print(f"  [akshare] 新浪获取 {code} 失败: {e}，尝试 yfinance...")
+        if fallback_df is not None:
+            self.adjusted = fallback_adjusted
+            print(f"  [akshare] 采用兜底数据，最新 {fallback_df.index[-1].date()}")
+            return fallback_df
+        raise RuntimeError(f"无法通过东方财富/腾讯/新浪 获取 {code} 数据")
 
-        # 第三层 fallback：yfinance（用于国内接口均缺失/滞后的标的，如 159915）
-        try:
-            from .yfinance_ds import YFinanceDataSource
+    def _is_stale(self, df: pd.DataFrame, end: str | None = None, expect_today: bool = False) -> bool:
+        """判断 df 的最新日期是否滞后。
 
-            yf_ds = YFinanceDataSource()
-            df_yf = yf_ds.fetch(code, start, end)
-            if not df_yf.empty:
-                print(f"  [akshare] 已使用 yfinance 数据，最新 {df_yf.index[-1].date()}")
-                self.adjusted = yf_ds.adjusted
-                return df_yf
-        except Exception as e:
-            print(f"  [akshare] yfinance 获取 {code} 失败: {e}")
-
-        if df is not None:
-            return df
-        raise RuntimeError(f"无法通过东方财富/腾讯/新浪/yfinance 获取 {code} 数据")
-
-    def _is_stale(self, df: pd.DataFrame, end: str | None = None) -> bool:
-        """判断 df 的最新日期是否早于预期截止日（默认今天）。"""
+        - expect_today=False（默认，未传 --today）：只要求最近一个交易日的数据，
+          容忍 STALE_TOLERANCE_DAYS 天（覆盖周末/节假日/当日尚未出数据）。
+        - expect_today=True（传了 --today）：严格要求当日数据，不容忍。
+        """
         if df.empty:
             return True
         latest = df.index[-1].date()
         expected = pd.to_datetime(end).date() if end else pd.Timestamp.now().date()
-        return latest < expected
+        tolerance = timedelta(days=0) if expect_today else timedelta(days=STALE_TOLERANCE_DAYS)
+        return latest < expected - tolerance

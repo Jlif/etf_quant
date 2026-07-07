@@ -45,7 +45,7 @@ def detect_and_fix_price_jumps(
     """
     检测并修正价格序列中的异常复权跳空。
 
-    yfinance 等数据源对国内 ETF 的复权处理偶尔出错，
+    部分数据源对国内 ETF 的复权处理偶尔出错，
     会出现单日涨跌幅远超正常范围（如 -50%）的虚假跳空。
     本函数把这些点当作"复权系数错误"，对前期价格做整体缩放，
     使修正后的序列保持连续。
@@ -240,7 +240,7 @@ def fetch_pool_data(
             if not silent:
                 print(f"  [{action}] {code} ({name}) via {data_source.name}")
             try:
-                df_new = data_source.fetch(code, target_start)
+                df_new = data_source.fetch(code, target_start, expect_today=include_today)
                 if os.path.exists(cache_file):
                     df_old = pd.read_csv(cache_file, index_col=0, parse_dates=True)
                     df_result = _merge_price_data(df_old, df_new)
@@ -253,6 +253,7 @@ def fetch_pool_data(
             except Exception as e:
                 return (code, df_cached, e)
         
+        failed_downloads = []  # [(code, name, error_msg), ...]
         with ThreadPoolExecutor(max_workers=min(2, len(download_tasks))) as executor:
             futures = [
                 executor.submit(_download_one, code, cache_file, meta_file, df_cached)
@@ -278,7 +279,14 @@ def fetch_pool_data(
                             print(f"  [回退] 使用缓存数据: {code} ({name})")
                     else:
                         raise error
+                    failed_downloads.append((code, name, str(error)[:100]))
                 downloaded_dfs[code] = df_result
+
+        if failed_downloads and not silent:
+            max_code_width = max(len(c) for c, _, _ in failed_downloads)
+            print(f"  [下载失败] {len(failed_downloads)} 个标的未能从数据源拉取到数据（已回退缓存）:")
+            for code, name, err in failed_downloads:
+                print(f"      {code.ljust(max_code_width)}  {name}  ({err})")
 
     # 第二遍：从缓存或下载结果中读取数据
     for code in codes:

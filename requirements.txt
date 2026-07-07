@@ -1,5 +1,4 @@
 akshare
-yfinance
 quantstats
 matplotlib
 pandas

@@ -471,7 +471,7 @@ def main():
     )
     parser.add_argument(
         "--l3-transition-powers",
-        default="3",
+        default="3.5",
         help="Layer3 平滑过渡幂指数列表，逗号分隔；'none' 表示不使用平滑过渡",
     )
     parser.add_argument(

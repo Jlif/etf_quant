@@ -99,20 +99,18 @@ strategies:
       risk_control:
         layer1:
           enabled: true
-          ma_lookback: 11
-          drawdown_lookback: 5
-          drawdown_threshold: 0.2
+          ma_lookback: 12
+          drawdown_lookback: 38
+          drawdown_threshold: 0.12
         layer2:
           enabled: true
-          atr_multiplier: 3.7
-          atr_lookback: 20
+          atr_multiplier: 2
+          atr_lookback: 13
         layer3:
           enabled: true
-          target_vol: 0.3
-          vol_lookback: 14
+          target_vol: 0.12
+          vol_lookback: 75
           comfort_zone: 0.25
           caution_zone: 0.4
-          # 旧三段式参数：未配置 transition_power 时生效
-          # caution_scale: 0.5
           # 平滑过渡参数：越大则波动率越接近 caution_zone 时仓位下降越快，建议 2.0~4.0
-          transition_power: 4.0
+          transition_power: 3.5

@@ -108,9 +108,9 @@ strategies:
           atr_lookback: 10
         layer3:
           enabled: true
-          target_vol: 0.12
-          vol_lookback: 75
+          vol_lookback: 100
+          target_vol: 0.25
           comfort_zone: 0.25
           caution_zone: 0.4
           # 平滑过渡参数：越大则波动率越接近 caution_zone 时仓位下降越快，建议 2.0~4.0
-          transition_power: 3.5
+          transition_power: 4

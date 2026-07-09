@@ -379,15 +379,34 @@ def layer3_vol_target_filter(
     """
     第三层：标的波动率平准（标的级别，非线性/平滑）。
 
-    对每只风险资产独立计算其 EWMA 年化波动率，按分段函数缩放该标的仓位：
-    - 波动率 < comfort_zone：线性缩放（target_vol / realized_vol），上限 1.0
-    - comfort_zone <= 波动率 < caution_zone：
-        - 若 transition_power 为 None：线性结果 * caution_scale（三段式）
-        - 若 transition_power 不为 None：幂函数平滑过渡，
-          波动率越接近 caution_zone，仓位下降越快
-    - 波动率 >= caution_zone：强制清零
+    与第一层（趋势/回撤清仓）、第二层（ATR 跟踪止损清仓）不同，本层不是
+    二值开关，而是对每只风险资产按其波动率连续缩放仓位，多数情况只降仓、
+    不清仓；只有波动率进入恐慌区才会强制清零。每只标的独立计算、独立缩放，
+    互不影响。
 
-    每只标的根据自己的波动率独立缩放，互不影响。
+    计算流程：
+    1. 对每只风险资产取日收益率，按 ewm(span=vol_lookback) 求标准差并年化
+       （* sqrt(252)），得到 EWMA 年化波动率 ewma_vol。近期波动权重更高，
+       对波动抬升的反应比等权滚动更快。
+    2. 线性基准 linear_scale = target_vol / ewma_vol，上限 clip 到 1.0，
+       即只降仓、不加杠杆，低波动不放大仓位。
+    3. 按 ewma_vol 所在区间分段缩放：
+       - 波动率 < comfort_zone：直接取 linear_scale；
+       - comfort_zone <= 波动率 < caution_zone：
+           * transition_power 为 None：linear_scale * caution_scale（固定折扣）；
+           * transition_power 不为 None：幂函数平滑过渡，
+             x = (ewma_vol - comfort_zone) / (caution_zone - comfort_zone) 归一到 [0, 1]，
+             smooth_factor = 1 - x ** transition_power，
+             scale = linear_scale * smooth_factor，波动率越接近 caution_zone 衰减越快；
+       - 波动率 >= caution_zone：scale = 0，该标的强制清零。
+    4. 缩放后由 safe_haven 承接所有释放的仓位，使总权重恒为 1。
+
+    Notes
+    -----
+    comfort_zone 并非“绝对安全区”。当 target_vol < comfort_zone 时，落在
+    (target_vol, comfort_zone) 内的标的仍会被 linear_scale 线性降仓
+    （例如 target_vol=0.12、ewma_vol=0.20 时 scale=0.60）。若希望 comfort 区
+    完全不干预，应配置 target_vol >= comfort_zone。
 
     Returns
     -------

@@ -445,14 +445,14 @@ def main():
         help="Layer2 ATR 回望周期列表，逗号分隔",
     )
     parser.add_argument(
-        "--l3-target-vols",
-        default="0.12",
-        help="Layer3 目标波动率列表（标的级别，单只ETF目标波动率），逗号分隔",
+        "--l3-vol-lookbacks",
+        default="100",
+        help="Layer3 波动率回望周期列表，逗号分隔",
     )
     parser.add_argument(
-        "--l3-vol-lookbacks",
-        default="75",
-        help="Layer3 波动率回望周期列表，逗号分隔",
+        "--l3-target-vols",
+        default="0.25",
+        help="Layer3 目标波动率列表（标的级别，单只ETF目标波动率），逗号分隔",
     )
     parser.add_argument(
         "--l3-comfort-zones",
@@ -471,7 +471,7 @@ def main():
     )
     parser.add_argument(
         "--l3-transition-powers",
-        default="3.5",
+        default="4",
         help="Layer3 平滑过渡幂指数列表，逗号分隔；'none' 表示不使用平滑过渡",
     )
     parser.add_argument(

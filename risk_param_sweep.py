@@ -421,17 +421,17 @@ def main():
     )
     parser.add_argument(
         "--l1-ma-lookbacks",
-        default="12",
+        default="13",
         help="Layer1 均线回望周期列表（标的级别，单只ETF价格均线），逗号分隔",
     )
     parser.add_argument(
         "--l1-drawdown-lookbacks",
-        default="38",
+        default="41",
         help="Layer1 回撤回望周期列表（标的级别，单只ETF回撤窗口），逗号分隔",
     )
     parser.add_argument(
         "--l1-drawdown-thresholds",
-        default="0.12",
+        default="0.08",
         help="Layer1 回撤阈值列表（标的级别，单只ETF从高点回撤），逗号分隔",
     )
     parser.add_argument(
@@ -441,7 +441,7 @@ def main():
     )
     parser.add_argument(
         "--l2-atr-lookbacks",
-        default="13",
+        default="10",
         help="Layer2 ATR 回望周期列表，逗号分隔",
     )
     parser.add_argument(
@@ -489,6 +489,11 @@ def main():
         "--today",
         action="store_true",
         help="拉取当天最新行情数据（默认使用缓存/历史数据）",
+    )
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="强制使用本地缓存，不触发任何数据下载或更新（需先通过 main 下载好数据）",
     )
     args = parser.parse_args()
 
@@ -555,7 +560,7 @@ def main():
         for code in required_codes
         if not os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
     ]
-    skip_test = not missing_codes and not args.today
+    skip_test = args.no_fetch or (not missing_codes and not args.today)
 
     data_source = get_data_source(
         name=provider,
@@ -563,7 +568,13 @@ def main():
         skip_test=skip_test,
     )
 
-    data = fetch_pool_data(strategy, app_config, data_source, include_today=args.today)
+    data = fetch_pool_data(
+        strategy,
+        app_config,
+        data_source,
+        include_today=args.today,
+        skip_download=args.no_fetch,
+    )
     results = sweep_risk_params(
         strategy=strategy,
         app_config=app_config,

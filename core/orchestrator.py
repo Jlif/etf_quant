@@ -127,6 +127,7 @@ def fetch_pool_data(
     start_date: str | None = None,
     min_bars: int | None = None,
     silent: bool = False,
+    skip_download: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """获取策略候选池 OHLC 数据，自动对齐起始日期并修正异常复权跳空。
 
@@ -143,7 +144,11 @@ def fetch_pool_data(
         过滤后要求的最少条数，不足时抛 ValueError。
     silent : bool
         为 True 时抑制所有进度打印，risk_param_sweep 使用。
+    skip_download : bool
+        为 True 时强制使用本地缓存，不触发任何网络下载；缓存缺失则报错。
     """
+    if skip_download:
+        include_today = False
     codes = [p.code for p in strategy.pool]
     names = {p.code: p.name for p in strategy.pool}
     cache_dir = app_config.backtest.cache_dir
@@ -225,7 +230,17 @@ def fetch_pool_data(
                         )
 
         if not cache_sufficient:
-            download_tasks.append((code, cache_file, meta_file, df))
+            if skip_download:
+                if df is not None and not df.empty:
+                    if not silent:
+                        print(f"  [强制缓存] {code} ({name}) 跳过下载，使用现有缓存")
+                    cached_dfs[code] = df
+                else:
+                    raise ValueError(
+                        f"跳过下载模式下 {code} ({name}) 无本地缓存可用"
+                    )
+            else:
+                download_tasks.append((code, cache_file, meta_file, df))
     
     # 并发下载需要更新的 ETF（最多 5 个并发）
     downloaded_dfs = {}
@@ -421,6 +436,7 @@ def run_strategy(
     start_date: str | None = None,
     min_bars: int | None = None,
     silent: bool = False,
+    skip_download: bool = False,
 ) -> tuple[pd.DataFrame, list[str]]:
     """执行单个策略回测，返回结果 DataFrame 与标的名称列表。
 
@@ -442,6 +458,7 @@ def run_strategy(
             start_date=start_date,
             min_bars=min_bars,
             silent=silent,
+            skip_download=skip_download,
         )
     name_list = data["close"].columns.tolist()
 

@@ -99,13 +99,13 @@ strategies:
       risk_control:
         layer1:
           enabled: true
-          ma_lookback: 12
-          drawdown_lookback: 38
-          drawdown_threshold: 0.12
+          ma_lookback: 13
+          drawdown_lookback: 41
+          drawdown_threshold: 0.08
         layer2:
           enabled: true
           atr_multiplier: 2
-          atr_lookback: 13
+          atr_lookback: 10
         layer3:
           enabled: true
           target_vol: 0.12

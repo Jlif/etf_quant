@@ -17,6 +17,7 @@ class DataSourceConfig:
 class BacktestConfig:
     start_date: str = "20130729"
     cache_dir: str = "./data_cache"
+    end_date: str | None = None  # 回测截止日 YYYYMMDD, None 表示一直用到最新数据
 
 
 @dataclass
@@ -35,6 +36,7 @@ class StrategyConfig:
     pool: list[PoolItem] = field(default_factory=list)
     params: dict = field(default_factory=dict)
     start_date: str | None = None  # 策略级起始日, None 则使用全局 backtest.start_date
+    end_date: str | None = None  # 策略级截止日, 优先于全局 backtest.end_date
     enabled: bool = True  # 是否启用该策略
 
 
@@ -108,6 +110,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                 pool=pool,
                 params=s.get("params", {}),
                 start_date=s.get("start_date"),
+                end_date=s.get("end_date"),
                 enabled=s.get("enabled", True),
             )
         )
@@ -119,6 +122,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         backtest=BacktestConfig(
             start_date=bt.get("start_date", "20130729"),
             cache_dir=bt.get("cache_dir", "./data_cache"),
+            end_date=bt.get("end_date"),
         ),
         strategies=strategies,
     )

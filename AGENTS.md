@@ -53,10 +53,12 @@ config.yaml → utils/config.py (AppConfig) → main.py
   - `load_config()` 从 YAML 解析为 `AppConfig` dataclass
   - `weighted` 模式会自动校验权重之和是否为 100%
   - 策略级 `start_date` 优先于全局 `backtest.start_date`
+  - 可选 `backtest.end_date`（策略级 `end_date` 可覆盖）作为回测截止日，留空则一直用到最新数据，便于"训练期调参、留样期验证"
 
 ### 关键设计
 
 - **数据缓存**：下载的 ETF 数据按 `data_cache/{code}_{provider}.csv` 缓存，不会自动过期，如需更新需手动删除
+- **回测截止日**：`backtest.end_date`（可选，YYYYMMDD）为全局回测截止日；策略级 `end_date` 可覆盖。`fetch_pool_data()` 在显式 `cutoff_date` 缺失时回退到该值，按 `<= end_date` 截断数据
 - **复权跳空修正**：`main.py` 中的 `detect_and_fix_price_jumps()` 会检测日收益率绝对值超过 30% 的异常点（yfinance 对国内 ETF 复权偶尔出错），通过整体缩放前期价格修复
 - **策略实际起始日**：取 `max(配置起始日, 所有 ETF 中最晚的数据起始日)`，并在日志中提示
 - **输出目录**：每次运行会清空 `output/` 目录，生成 HTML 报告和 PNG 图表

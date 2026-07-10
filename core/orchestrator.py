@@ -158,6 +158,17 @@ def fetch_pool_data(
     target_start = start_date or strategy.start_date or app_config.backtest.start_date
     target_start_dt = pd.to_datetime(target_start)
 
+    # 回测截止日：显式 cutoff_date 参数 > 策略级 end_date > 全局 backtest.end_date
+    if cutoff_date is None:
+        end_date_str = strategy.end_date or app_config.backtest.end_date
+        if end_date_str:
+            cutoff_date = pd.to_datetime(end_date_str)
+
+    if cutoff_date is not None and cutoff_date < target_start_dt:
+        raise ValueError(
+            f"回测截止日 {cutoff_date.date()} 早于起始日 {target_start_dt.date()}"
+        )
+
     all_close = {}
     all_open = {}
     all_high = {}
@@ -322,6 +333,27 @@ def fetch_pool_data(
                 )
             df = df_before
 
+        # cutoff 后该 ETF 可能在回测窗口内完全无数据（上市日晚于截止日）
+        if df is None or df.empty:
+            is_critical = (
+                name == strategy.params.get("safe_haven")
+                or name == strategy.params.get("benchmark")
+            )
+            if is_critical or not strategy.params.get("dynamic_pool", False):
+                window_end = cutoff_date.date() if cutoff_date is not None else "最新"
+                hint = "" if is_critical else "，或开启 params.dynamic_pool 自动排除未上市标的"
+                raise ValueError(
+                    f"{code} ({name}) 在回测窗口 "
+                    f"{target_start_dt.date()} ~ {window_end} 内无数据；"
+                    f"请调整 backtest.end_date / start_date{hint}"
+                )
+            if not silent:
+                print(
+                    f"  [剔除] {code} ({name}) 在回测窗口内无数据"
+                    f"（上市日晚于截止日），已从候选池排除"
+                )
+            continue
+
         close_col = f"{code}_close"
         open_col = f"{code}_open"
         high_col = f"{code}_high"
@@ -361,6 +393,11 @@ def fetch_pool_data(
     data_open = pd.DataFrame(all_open)
     data_high = pd.DataFrame(all_high)
     data_low = pd.DataFrame(all_low)
+
+    if data_close.empty:
+        raise ValueError(
+            "回测窗口内所有 ETF 均无数据，请检查 start_date / end_date 与候选池上市日"
+        )
 
     latest_etf_start = max(actual_starts.values())
     earliest_etf_start = min(actual_starts.values())

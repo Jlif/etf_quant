@@ -9,6 +9,10 @@ data_source:
 # 回测全局配置
 backtest:
   start_date: "20200101"
+  # 可选：回测截止日（YYYYMMDD）。设置后所有策略只回测到该日，
+  # 便于"先在某段时间调参，再用之后一段时间留样验证"。
+  # 不设（留空或注释掉）则一直用到最新数据；也可在单个策略下用 end_date 覆盖。
+  end_date: "20240901"
   cache_dir: "./data_cache"
 
 # 策略列表

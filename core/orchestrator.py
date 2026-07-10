@@ -245,6 +245,8 @@ def fetch_pool_data(
                 if df is not None and not df.empty:
                     if not silent:
                         print(f"  [强制缓存] {code} ({name}) 跳过下载，使用现有缓存")
+                    if cutoff_date is not None:
+                        df = _filter_by_cutoff(df, cutoff_date)
                     cached_dfs[code] = df
                 else:
                     raise ValueError(

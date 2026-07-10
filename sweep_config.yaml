@@ -1,0 +1,34 @@
+# 风控参数扫描专用配置
+# 用法: python risk_param_sweep.py --sweep-config sweep_config.yaml
+# CLI 参数可覆盖此文件中的任意值
+
+# 回测窗口（覆盖 config.yaml 的 backtest.start_date/end_date）
+start_date: "20200101"
+end_date: "20231231"
+
+# 扫描模式: grid | sequential
+mode: "sequential"
+
+# 数据选项
+no_fetch: true   # true: 强制读缓存，不下载；false: 允许下载/更新
+today: false     # true: 拉取当天最新数据
+
+# 输出
+output: "output/risk_sweep_seq.csv"
+sort_by: "cagr"
+# sharpe_threshold: 0.7  # sequential 模式下判定较优取值的最小夏普
+
+# 参数扫描范围
+params:
+  lookbacks: [15, 20, 25]
+  l1_ma_lookbacks: [13]
+  l1_drawdown_lookbacks: [41]
+  l1_drawdown_thresholds: [0.08]
+  l2_atr_multipliers: [2.0]
+  l2_atr_lookbacks: [10]
+  l3_target_vols: [0.15, 0.25, 0.35]
+  l3_vol_lookbacks: [100]
+  l3_comfort_zones: [0.25]
+  l3_caution_zones: [0.4]
+  l3_caution_scales: [0.5]
+  l3_transition_powers: [4.0]

@@ -12,7 +12,7 @@ backtest:
   # 可选：回测截止日（YYYYMMDD）。设置后所有策略只回测到该日，
   # 便于"先在某段时间调参，再用之后一段时间留样验证"。
   # 不设（留空或注释掉）则一直用到最新数据；也可在单个策略下用 end_date 覆盖。
-  end_date: "20240901"
+  # end_date: "20240901"
   cache_dir: "./data_cache"
 
 # 策略列表
@@ -103,7 +103,7 @@ strategies:
       risk_control:
         layer1:
           enabled: true
-          ma_lookback: 13
+          ma_lookback: 16
           drawdown_lookback: 41
           drawdown_threshold: 0.08
         layer2:
@@ -112,8 +112,8 @@ strategies:
           atr_lookback: 10
         layer3:
           enabled: true
-          vol_lookback: 100
-          target_vol: 0.25
+          vol_lookback: 110
+          target_vol: 0.15
           comfort_zone: 0.25
           caution_zone: 0.4
           # 平滑过渡参数：越大则波动率越接近 caution_zone 时仓位下降越快，建议 2.0~4.0

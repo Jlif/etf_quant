@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import re
 
@@ -22,6 +23,76 @@ OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # HTML 报告英文指标 -> 中文翻译映射
+_COLOR_STRATEGY = "#1f77b4"
+_COLOR_BENCHMARK = "#ff7f0e"
+
+
+def _eoy_returns(returns: pd.Series) -> pd.Series:
+    """按年复利计算年度收益率，索引为年份（int）。"""
+    compounded = (1 + returns).resample("YE").prod() - 1
+    compounded.index = compounded.index.year
+    return compounded
+
+
+def _plot_eoy_returns_with_labels(
+    returns: pd.Series,
+    benchmark: pd.Series | None = None,
+) -> str:
+    """绘制带数字标签的 EOY Returns SVG，尺寸与 quantstats 原生图一致（576pt x 288pt）。"""
+    strategy_eoy = _eoy_returns(returns)
+    benchmark_eoy = _eoy_returns(benchmark) if benchmark is not None else None
+
+    all_years = sorted(strategy_eoy.index)
+    if benchmark_eoy is not None:
+        all_years = sorted(set(strategy_eoy.index) | set(benchmark_eoy.index))
+
+    s_vals = [strategy_eoy.get(y, float("nan")) * 100 for y in all_years]
+    b_vals = [benchmark_eoy.get(y, float("nan")) * 100 for y in all_years] if benchmark_eoy is not None else None
+
+    fig, ax = plt.subplots(figsize=(8, 4), dpi=72)
+    x = range(len(all_years))
+
+    if b_vals is None:
+        bars = ax.bar(x, s_vals, color=_COLOR_STRATEGY, label="Strategy")
+        _add_bar_labels(ax, bars)
+    else:
+        width = 0.35
+        bars_s = ax.bar([i - width / 2 for i in x], s_vals, width, color=_COLOR_STRATEGY, label="Strategy")
+        bars_b = ax.bar([i + width / 2 for i in x], b_vals, width, color=_COLOR_BENCHMARK, label="Benchmark")
+        _add_bar_labels(ax, bars_s)
+        _add_bar_labels(ax, bars_b)
+        ax.legend(loc="upper left")
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(all_years)
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_title("EOY Returns vs Benchmark" if benchmark is not None else "EOY Returns")
+    ax.set_ylabel("Return (%)")
+    ax.grid(True, alpha=0.3, axis="y")
+
+    buf = io.StringIO()
+    fig.savefig(buf, format="svg", dpi=72)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _add_bar_labels(ax, bars) -> None:
+    """在柱状图顶部或底部添加收益率数字标签。"""
+    for bar in bars:
+        height = bar.get_height()
+        if height is None or (isinstance(height, float) and (height != height)):
+            continue
+        offset = 2 if height >= 0 else -5
+        va = "bottom" if height >= 0 else "top"
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            height + offset,
+            f"{height:.1f}%",
+            ha="center",
+            va=va,
+            fontsize=8,
+        )
+
 _METRIC_TRANSLATIONS: dict[str, str] = {
     "Risk-Free Rate": "无风险利率",
     "Time in Market": "市场持仓时间占比",
@@ -174,6 +245,13 @@ def performance_report(
             html_content = f.read()
         html_content = _translate_html_metrics(html_content)
 
+        # 用带数字标签的 EOY Returns 图表替换 quantstats 原生 SVG
+        try:
+            eoy_svg = _plot_eoy_returns_with_labels(returns, benchmark=benchmark)
+            html_content = _replace_eoy_returns_svg(html_content, eoy_svg)
+        except Exception as e:
+            print(f"[警告] EOY Returns 图表增强失败: {e}")
+
         # 在 HTML 末尾追加每日持仓记录表格
         if holding_df is not None and not holding_df.empty:
             holding_html = _build_holding_html(holding_df)
@@ -186,6 +264,20 @@ def performance_report(
     except Exception as e:
         print(f"\n[警告] HTML 报告生成失败: {e}")
     return filepath
+
+
+def _replace_eoy_returns_svg(html_content: str, new_svg: str) -> str:
+    """替换 HTML 中 <div id=\"eoy_returns\"> 内的 SVG 为新的 SVG。"""
+    start_marker = '<div id="eoy_returns">'
+    start = html_content.find(start_marker)
+    if start == -1:
+        return html_content
+    # 找到该 div 对应的结束标签
+    div_end = html_content.find("</div>", start + len(start_marker))
+    if div_end == -1:
+        return html_content
+    div_end += len("</div>")
+    return html_content[:start] + f'<div id="eoy_returns">{new_svg}</div>' + html_content[div_end:]
 
 
 def _build_holding_html(holding_df: pd.DataFrame) -> str:

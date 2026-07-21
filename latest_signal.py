@@ -21,6 +21,7 @@ import sys
 from datetime import datetime, timedelta
 
 import pandas as pd
+import yaml
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -49,9 +50,36 @@ def get_last_trading_day(date: datetime | None = None) -> datetime:
     return date
 
 
+def load_capital_config(path: str) -> dict:
+    """加载资金配置；文件不存在或缺少 total_capital 时返回空 dict（向后兼容）。"""
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    total_capital = raw.get("total_capital")
+    if not isinstance(total_capital, (int, float)) or total_capital <= 0:
+        return {}
+    lot_size = raw.get("lot_size", 100)
+    try:
+        lot_size = int(lot_size)
+    except (TypeError, ValueError):
+        lot_size = 100
+    if lot_size <= 0:
+        lot_size = 100
+    return {
+        "total_capital": float(total_capital),
+        "lot_size": lot_size,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="ETF 最新信号打印")
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
+    parser.add_argument(
+        "--capital-config",
+        default="capital_config.yaml",
+        help="资金配置文件路径（含资金总量，用于计算买入金额与股数）",
+    )
     parser.add_argument("--strategy", help="指定策略名称（默认运行所有启用策略）")
     parser.add_argument("--date", help="指定交易截止日 (YYYYMMDD)，默认上一个交易日")
     parser.add_argument(
@@ -78,6 +106,12 @@ def main():
         print(f"[默认截止日] 上一个交易日: {cutoff_date.date()}")
 
     app_config = load_config(args.config)
+    capital_cfg = load_capital_config(args.capital_config)
+    total_capital = capital_cfg.get("total_capital")
+    lot_size = capital_cfg.get("lot_size", 100)
+    if total_capital:
+        print(f"资金总量: {total_capital:,.0f} 元 (每手 {lot_size} 股)")
+
     enabled_strategies = [s for s in app_config.strategies if s.enabled]
 
     # 如果指定了策略名称，过滤
@@ -147,7 +181,10 @@ def main():
                 for name in name_list
             }
 
-            print_latest_signal(strategy, result, name_list, last_quote_dates)
+            print_latest_signal(
+                strategy, result, name_list, last_quote_dates,
+                capital=total_capital, lot_size=lot_size,
+            )
         except Exception as e:
             print(f"\n[错误] 策略 '{strategy.name}' 执行失败: {e}")
             import traceback

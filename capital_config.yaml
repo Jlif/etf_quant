@@ -1,0 +1,5 @@
+# 资金配置（latest_signal.py 专用）
+# 用法：python latest_signal.py --capital-config capital_config.yaml
+
+total_capital:  72000  # 资金总量（元）
+lot_size: 100          # 最小交易单位（股），A 股 ETF 为 100

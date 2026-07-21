@@ -525,11 +525,24 @@ def run_strategy(
     return result, name_list
 
 
+def _calc_position(
+    capital: float, weight_frac: float, price: float, lot_size: int = 100
+) -> tuple[float, int]:
+    """按资金与权重计算买入金额和股数（向下取整到 lot_size 的整数倍）。"""
+    amount = capital * weight_frac
+    if price <= 0 or not np.isfinite(price):
+        return amount, 0
+    shares = int((amount / price) // lot_size) * lot_size
+    return amount, max(0, shares)
+
+
 def print_latest_signal(
     strategy: StrategyConfig,
     result: pd.DataFrame,
     name_list: list[str],
     last_quote_dates: dict[str, str] | None = None,
+    capital: float | None = None,
+    lot_size: int = 100,
 ):
     """打印最新交易日的信号与操作建议（rotation / weighted）。"""
     latest = result.iloc[-1]
@@ -662,7 +675,16 @@ def print_latest_signal(
         holdings = [(name, latest[f"{weight_prefix}{name}"]) for name in name_list if latest[f"{weight_prefix}{name}"] > 0]
         for name, weight in holdings:
             code = next((p.code for p in strategy.pool if p.name == name), "")
-            print(f"  持有 {name} ({code}): {weight*100:.0f}%")
+            line = f"  持有 {name} ({code}): {weight*100:.0f}%"
+            if capital:
+                price = float(result[name].iloc[-1])
+                amount, shares = _calc_position(capital, float(weight), price, lot_size)
+                line += (
+                    f" | 买入金额 ≈ {amount:,.0f} 元"
+                    f" | 最新价 {price:.3f}"
+                    f" | 买入 {shares} 股"
+                )
+            print(line)
 
     elif strategy.mode == "weighted":
         header = (
@@ -688,6 +710,18 @@ def print_latest_signal(
 
         print(f"{'='*60}")
         print("操作建议: 按上述目标权重配置仓位")
+        if capital:
+            for name in name_list:
+                weight_frac = weights.get(name, 0) / 100.0
+                if weight_frac <= 0:
+                    continue
+                code = next((p.code for p in strategy.pool if p.name == name), "")
+                price = float(result[name].iloc[-1])
+                amount, shares = _calc_position(capital, weight_frac, price, lot_size)
+                print(
+                    f"  买入 {name} ({code}): {weight_frac*100:.0f}% | "
+                    f"金额 ≈ {amount:,.0f} 元 | 最新价 {price:.3f} | 买入 {shares} 股"
+                )
 
     print(f"{'='*60}")
 

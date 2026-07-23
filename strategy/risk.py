@@ -233,7 +233,7 @@ def layer1_market_filter(
     对每只风险资产独立判断：
     - 价格跌破 N 日均线 → 清仓该标的
     - 从 M 日高点回撤超过阈值 → 清仓该标的
-    触发的标的转入 safe_haven，未触发的标的不受影响。
+    触发的标的权重清零，释放的仓位由调用方根据当日得分统一递补。
 
     Returns
     -------
@@ -247,7 +247,6 @@ def layer1_market_filter(
     weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
     name_list = [c.replace("权重_", "") for c in weight_cols]
     risk_names = [n for n in name_list if n != safe_haven]
-    safe_col = f"权重_{safe_haven}"
 
     ma_triggered: dict[str, pd.Series] = {}
     dd_triggered: dict[str, pd.Series] = {}
@@ -266,12 +265,8 @@ def layer1_market_filter(
         dd_triggered[name] = dd_trig
 
         if triggered.any():
-            adjusted.loc[triggered, safe_col] += adjusted.loc[triggered, f"权重_{name}"]
             adjusted.loc[triggered, f"权重_{name}"] = 0.0
 
-    # 归一化，避免浮点误差导致权重和不为 1
-    total = adjusted[weight_cols].sum(axis=1)
-    adjusted = adjusted.div(total, axis=0).fillna(0.0)
     return adjusted, {"ma": ma_triggered, "drawdown": dd_triggered}
 
 
@@ -288,7 +283,7 @@ def layer2_atr_trailing_stop(
     第二层：ATR 跟踪止损拦截。
 
     对每只风险资产维护持仓期间最高价（high water mark）。
-    若收盘价从 HWM 回落超过 atr_multiplier * ATR，则清仓并转入 safe_haven。
+    若收盘价从 HWM 回落超过 atr_multiplier * ATR，则清仓，释放的仓位由调用方统一递补。
 
     Parameters
     ----------
@@ -353,15 +348,9 @@ def layer2_atr_trailing_stop(
                 if pd.isna(current_atr):
                     continue
                 if current_price < hwm.loc[date, name] - atr_multiplier * current_atr:
-                    if safe_haven and safe_haven in name_list:
-                        safe_col = f"权重_{safe_haven}"
-                        adjusted.loc[date, safe_col] += current_weight
                     adjusted.loc[date, weight_col] = 0.0
                     hwm.loc[date, name] = np.nan
 
-    # 归一化
-    total = adjusted[weight_cols].sum(axis=1)
-    adjusted = adjusted.div(total, axis=0).fillna(0.0)
     return adjusted
 
 
@@ -399,7 +388,7 @@ def layer3_vol_target_filter(
              smooth_factor = 1 - x ** transition_power，
              scale = linear_scale * smooth_factor，波动率越接近 caution_zone 衰减越快；
        - 波动率 >= caution_zone：scale = 0，该标的强制清零。
-    4. 缩放后由 safe_haven 承接所有释放的仓位，使总权重恒为 1。
+    4. 缩放后释放的仓位不再自动补回 safe_haven，由调用方根据当日得分统一递补。
 
     Notes
     -----
@@ -455,9 +444,5 @@ def layer3_vol_target_filter(
         scale = scale.fillna(1.0)
 
         adjusted[f"权重_{name}"] *= scale
-
-    if safe_haven and safe_haven in name_list:
-        safe_col = f"权重_{safe_haven}"
-        adjusted[safe_col] = 1.0 - adjusted[[f"权重_{n}" for n in risk_names]].sum(axis=1)
 
     return adjusted

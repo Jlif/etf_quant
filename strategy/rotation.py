@@ -33,6 +33,61 @@ def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
     return default_lookback + 1
 
 
+def _fill_risk_shortfall(
+    weights_df: pd.DataFrame,
+    score_df: pd.DataFrame,
+    eligible_df: pd.DataFrame,
+    top_n: int,
+    safe_haven: str | None,
+) -> pd.DataFrame:
+    """
+    风控后，将因清零释放的仓位按当日动量得分顺延补给后续标的。
+
+    约束：最终持仓标的数量不超过 top_n。
+    - 当前已有 top_n 只非零持仓时，压缩造成的缺口保留为现金，不再开新仓。
+    - 当前持仓少于 top_n 只时，从候选池中按得分降序补选得分为正的标的，
+      每只占 1/top_n；若正得分标的不足，剩余缺口由 safe_haven 承接。
+    """
+    adjusted = weights_df.copy()
+    weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
+    name_list = [c.replace("权重_", "") for c in weight_cols]
+    unit_weight = 1.0 / top_n if top_n > 0 else 0.0
+
+    for date in adjusted.index:
+        shortfall = 1.0 - adjusted.loc[date, weight_cols].sum()
+        if shortfall <= 1e-12:
+            continue
+
+        current_count = int((adjusted.loc[date, weight_cols] > 0).sum())
+        slots = top_n - current_count
+        if slots <= 0:
+            # 已满 top_n 只，压缩造成的缺口保留为现金
+            continue
+
+        current_scores = score_df.loc[date].where(eligible_df.loc[date])
+        held = {n for n in name_list if adjusted.loc[date, f"权重_{n}"] > 0}
+
+        candidates = current_scores.dropna().sort_values(ascending=False)
+        candidates = candidates[candidates > 0]
+
+        for name, _ in candidates.items():
+            if name in held:
+                continue
+            if slots <= 0 or shortfall <= 1e-12:
+                break
+            add = min(unit_weight, shortfall)
+            adjusted.loc[date, f"权重_{name}"] += add
+            shortfall -= add
+            slots -= 1
+            held.add(name)
+
+        # 还有空位且没有更多正得分候选，用 safe_haven 补足剩余缺口
+        if slots > 0 and shortfall > 1e-12 and safe_haven and safe_haven in name_list:
+            adjusted.loc[date, f"权重_{safe_haven}"] += min(unit_weight * slots, shortfall)
+
+    return adjusted
+
+
 def run(
     data: dict[str, pd.DataFrame],
     name_list: list[str],
@@ -171,6 +226,7 @@ def run(
 
     # 3. 生成每日权重：top_n 等权，其余为 0
     eligible_signal_df = df[signal_cols].where(eligible_df.values)
+    score_by_name = eligible_signal_df.rename(columns=lambda c: c.replace(prefix, ""))
     rank_df = eligible_signal_df.rank(axis=1, ascending=False, method="first", na_option="keep")
     for name in name_list:
         col = f"{prefix}{name}"
@@ -342,6 +398,21 @@ def run(
                         f"仓位压缩为{caution_scale:.0%}; "
                     )
                 df.loc[caution, f"风控原因_{name}"] = "L3-波动率压缩"
+
+    # 3.8 风控后仓位递补：被清零/压缩释放的仓位优先补给后续正得分标的，
+    #     没有正得分标的时才归 safe_haven。
+    safe_haven = params.get("safe_haven")
+    weight_cols = [f"权重_{n}" for n in name_list]
+    weights_df = df[weight_cols].copy()
+    filled_weights = _fill_risk_shortfall(
+        weights_df,
+        score_by_name,
+        eligible_df,
+        top_n,
+        safe_haven,
+    )
+    for name in name_list:
+        df[f"权重_{name}"] = filled_weights[f"权重_{name}"]
 
     # 4. 保存原始信号日权重和风控原因，供“今日交易信号”展示使用。
     #    回测收益仍使用 shift 后的持仓列，保持 T 日信号决定 T+1 日收益的逻辑。

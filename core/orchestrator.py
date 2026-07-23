@@ -546,7 +546,6 @@ def print_latest_signal(
 ):
     """打印最新交易日的信号与操作建议（rotation / weighted）。"""
     latest = result.iloc[-1]
-    prev = result.iloc[-2] if len(result) > 1 else None
 
     print(f"\n{'='*60}")
     print(f"【今日交易信号】{strategy.name}")
@@ -646,26 +645,6 @@ def print_latest_signal(
                 f"{_ljust(reason, 12)}"
             )
             print(row)
-
-        if prev is not None:
-            print(f"\n{'-'*60}")
-            print("持仓变化:")
-            current_holdings = [name for name in name_list if latest[f"权重_{name}"] > 0]
-            prev_holdings = [name for name in name_list if prev[f"权重_{name}"] > 0]
-
-            added = set(current_holdings) - set(prev_holdings)
-            removed = set(prev_holdings) - set(current_holdings)
-
-            if added:
-                for name in added:
-                    code = next((p.code for p in strategy.pool if p.name == name), "")
-                    print(f"  [买入] {name} ({code})")
-            if removed:
-                for name in removed:
-                    code = next((p.code for p in strategy.pool if p.name == name), "")
-                    print(f"  [卖出] {name} ({code})")
-            if not added and not removed:
-                print("  [维持] 持仓不变")
 
         print(f"{'='*60}")
         print("操作建议:")

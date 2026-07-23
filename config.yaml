@@ -102,7 +102,7 @@ strategies:
       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
       dynamic_pool: true 
       # 风控导致仓位释放后，是否按当日动量得分顺位补选新标的；false 则直接全部买入 safe_haven
-      fill_shortfall_by_score: false
+      fill_shortfall_by_score: true
       safe_haven: "银华日利ETF"
       risk_control:
         layer1:

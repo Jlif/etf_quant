@@ -40,14 +40,17 @@ def _fill_risk_shortfall(
     top_n: int,
     safe_haven: str | None,
     fill_by_score: bool = True,
+    blocked_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     风控后，将因清零释放的仓位进行再分配。
 
     约束：最终持仓标的数量不超过 top_n，且总权重保持为 1（满仓）。
     - fill_by_score 为 True 时：
-      当前持仓少于 top_n 只时，从候选池中按得分降序补选得分为正的标的，
-      每只占 1/top_n；若正得分标的不足或已满 top_n，剩余缺口由 safe_haven 承接。
+      严格按当日得分排名，取前 top_n 名作为目标持仓；
+      若前 top_n 中有被风控清零（blocked）的标的，则从 top_n 之后顺位补选，
+      而不是重新把被剔除的高分标纳入。
+      若后续可选标的不足以填满 top_n，剩余缺口由 safe_haven 承接。
     - fill_by_score 为 False 时：
       风控释放的仓位不再按得分补选新标的，直接全部买入 safe_haven，保持满仓。
     """
@@ -56,34 +59,35 @@ def _fill_risk_shortfall(
     name_list = [c.replace("权重_", "") for c in weight_cols]
     unit_weight = 1.0 / top_n if top_n > 0 else 0.0
     safe_col = f"权重_{safe_haven}" if safe_haven and safe_haven in name_list else None
+    blocked_df = blocked_df if blocked_df is not None else pd.DataFrame(False, index=adjusted.index, columns=name_list)
 
     for date in adjusted.index:
         shortfall = 1.0 - adjusted.loc[date, weight_cols].sum()
         if shortfall <= 1e-12:
             continue
 
-        current_count = int((adjusted.loc[date, weight_cols] > 0).sum())
-        slots = top_n - current_count
-
-        if fill_by_score and slots > 0:
+        if fill_by_score:
             current_scores = score_df.loc[date].where(eligible_df.loc[date])
-            held = {n for n in name_list if adjusted.loc[date, f"权重_{n}"] > 0}
+            ranked = current_scores.dropna().sort_values(ascending=False)
+            ranked = ranked[ranked > 0]
+            blocked = set(name_list[i] for i, v in enumerate(blocked_df.loc[date].values) if v)
 
-            candidates = current_scores.dropna().sort_values(ascending=False)
-            candidates = candidates[candidates > 0]
-
-            for name, _ in candidates.items():
-                if name in held:
-                    continue
-                if slots <= 0 or shortfall <= 1e-12:
+            # 目标：从排名中依次取 top_n 个非 blocked 标的
+            selected: list[str] = []
+            for name, _ in ranked.items():
+                if len(selected) >= top_n:
                     break
-                add = min(unit_weight, shortfall)
-                adjusted.loc[date, f"权重_{name}"] += add
-                shortfall -= add
-                slots -= 1
-                held.add(name)
+                if name not in blocked:
+                    selected.append(name)
+                # 若 name 被 blocked，继续看下一个，从排名后续递补
 
-        # 无论是否已满 top_n，剩余缺口都由 safe_haven 补足，保持满仓
+            # 分配权重：每个入选标 1/top_n
+            for name in selected:
+                adjusted.loc[date, f"权重_{name}"] = unit_weight
+
+            # 剩余缺口由 safe_haven 承接
+            shortfall = 1.0 - adjusted.loc[date, weight_cols].sum()
+
         if shortfall > 1e-12 and safe_col is not None:
             adjusted.loc[date, safe_col] += shortfall
 
@@ -256,6 +260,10 @@ def run(
     for name in name_list:
         df[f"风控原因_{name}"] = ""
 
+    # 记录风控前的原始轮动权重，用于识别被风控强制清零的标的
+    raw_weight_cols = [f"权重_{n}" for n in name_list]
+    raw_weights_df = df[raw_weight_cols].copy()
+
     # 3.05–3.7 三层风控系统
     risk_control = params.get("risk_control", {})
 
@@ -403,10 +411,13 @@ def run(
 
     # 3.8 风控后仓位递补：被清零/压缩释放的仓位优先补给后续正得分标的，
     #     没有正得分标的时才归 safe_haven；也可配置为直接全部归 safe_haven。
+    #     被风控强制清零的标的不再重新纳入，只从排名后续顺位递补。
     safe_haven = params.get("safe_haven")
     fill_by_score = params.get("fill_shortfall_by_score", True)
     weight_cols = [f"权重_{n}" for n in name_list]
     weights_df = df[weight_cols].copy()
+    blocked_df = (raw_weights_df > 0) & (weights_df == 0)
+    blocked_df.columns = name_list
     filled_weights = _fill_risk_shortfall(
         weights_df,
         score_by_name,
@@ -414,6 +425,7 @@ def run(
         top_n,
         safe_haven,
         fill_by_score=fill_by_score,
+        blocked_df=blocked_df,
     )
     for name in name_list:
         df[f"权重_{name}"] = filled_weights[f"权重_{name}"]

@@ -2,9 +2,11 @@
 
 from .base import BaseDataSource
 from .akshare_ds import AkshareDataSource
+from .yfinance_ds import YFinanceDataSource
 
 BUILTIN_SOURCES: dict[str, type[BaseDataSource]] = {
     "akshare": AkshareDataSource,
+    "yfinance": YFinanceDataSource,
 }
 
 
@@ -26,8 +28,8 @@ def get_data_source(
         是否跳过连通性测试。当本地缓存已存在时，可跳过测试以避免触发网络请求。
     """
     if name is None:
-        # 默认数据源: akshare
-        candidates = ["akshare"]
+        # 默认探测顺序：akshare -> yfinance
+        candidates = ["akshare", "yfinance"]
     else:
         candidates = [name]
 
@@ -47,17 +49,17 @@ def get_data_source(
             # 由调用方在有缓存时避免重复请求。
             try:
                 _test = instance.fetch("510300", "20240101", "20240110")
-                close_col = f"510300_close"
+                close_col = "510300_close"
                 if close_col in _test.columns and not _test.empty:
                     print(f"[数据源] 使用 {candidate}")
                     return instance
             except Exception as e:
                 last_error = e
                 print(f"[数据源] {candidate} 连通性测试失败: {e}")
-                if fallback:
-                    print(f"[数据源] 仍使用 {candidate}（依赖本地缓存）")
-                    return instance
-                raise
+                if not fallback:
+                    raise
+                # fallback 为 True 时继续尝试下一个候选数据源
+                continue
         except Exception as e:
             last_error = e
             print(f"[数据源] {candidate} 不可用: {e}")

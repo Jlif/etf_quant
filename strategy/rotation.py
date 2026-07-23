@@ -39,19 +39,23 @@ def _fill_risk_shortfall(
     eligible_df: pd.DataFrame,
     top_n: int,
     safe_haven: str | None,
+    fill_by_score: bool = True,
 ) -> pd.DataFrame:
     """
-    风控后，将因清零释放的仓位按当日动量得分顺延补给后续标的。
+    风控后，将因清零释放的仓位进行再分配。
 
-    约束：最终持仓标的数量不超过 top_n。
-    - 当前已有 top_n 只非零持仓时，压缩造成的缺口保留为现金，不再开新仓。
-    - 当前持仓少于 top_n 只时，从候选池中按得分降序补选得分为正的标的，
-      每只占 1/top_n；若正得分标的不足，剩余缺口由 safe_haven 承接。
+    约束：最终持仓标的数量不超过 top_n，且总权重保持为 1（满仓）。
+    - fill_by_score 为 True 时：
+      当前持仓少于 top_n 只时，从候选池中按得分降序补选得分为正的标的，
+      每只占 1/top_n；若正得分标的不足或已满 top_n，剩余缺口由 safe_haven 承接。
+    - fill_by_score 为 False 时：
+      风控释放的仓位不再按得分补选新标的，直接全部买入 safe_haven，保持满仓。
     """
     adjusted = weights_df.copy()
     weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
     name_list = [c.replace("权重_", "") for c in weight_cols]
     unit_weight = 1.0 / top_n if top_n > 0 else 0.0
+    safe_col = f"权重_{safe_haven}" if safe_haven and safe_haven in name_list else None
 
     for date in adjusted.index:
         shortfall = 1.0 - adjusted.loc[date, weight_cols].sum()
@@ -60,30 +64,28 @@ def _fill_risk_shortfall(
 
         current_count = int((adjusted.loc[date, weight_cols] > 0).sum())
         slots = top_n - current_count
-        if slots <= 0:
-            # 已满 top_n 只，压缩造成的缺口保留为现金
-            continue
 
-        current_scores = score_df.loc[date].where(eligible_df.loc[date])
-        held = {n for n in name_list if adjusted.loc[date, f"权重_{n}"] > 0}
+        if fill_by_score and slots > 0:
+            current_scores = score_df.loc[date].where(eligible_df.loc[date])
+            held = {n for n in name_list if adjusted.loc[date, f"权重_{n}"] > 0}
 
-        candidates = current_scores.dropna().sort_values(ascending=False)
-        candidates = candidates[candidates > 0]
+            candidates = current_scores.dropna().sort_values(ascending=False)
+            candidates = candidates[candidates > 0]
 
-        for name, _ in candidates.items():
-            if name in held:
-                continue
-            if slots <= 0 or shortfall <= 1e-12:
-                break
-            add = min(unit_weight, shortfall)
-            adjusted.loc[date, f"权重_{name}"] += add
-            shortfall -= add
-            slots -= 1
-            held.add(name)
+            for name, _ in candidates.items():
+                if name in held:
+                    continue
+                if slots <= 0 or shortfall <= 1e-12:
+                    break
+                add = min(unit_weight, shortfall)
+                adjusted.loc[date, f"权重_{name}"] += add
+                shortfall -= add
+                slots -= 1
+                held.add(name)
 
-        # 还有空位且没有更多正得分候选，用 safe_haven 补足剩余缺口
-        if slots > 0 and shortfall > 1e-12 and safe_haven and safe_haven in name_list:
-            adjusted.loc[date, f"权重_{safe_haven}"] += min(unit_weight * slots, shortfall)
+        # 无论是否已满 top_n，剩余缺口都由 safe_haven 补足，保持满仓
+        if shortfall > 1e-12 and safe_col is not None:
+            adjusted.loc[date, safe_col] += shortfall
 
     return adjusted
 
@@ -400,8 +402,9 @@ def run(
                 df.loc[caution, f"风控原因_{name}"] = "L3-波动率压缩"
 
     # 3.8 风控后仓位递补：被清零/压缩释放的仓位优先补给后续正得分标的，
-    #     没有正得分标的时才归 safe_haven。
+    #     没有正得分标的时才归 safe_haven；也可配置为直接全部归 safe_haven。
     safe_haven = params.get("safe_haven")
+    fill_by_score = params.get("fill_shortfall_by_score", True)
     weight_cols = [f"权重_{n}" for n in name_list]
     weights_df = df[weight_cols].copy()
     filled_weights = _fill_risk_shortfall(
@@ -410,6 +413,7 @@ def run(
         eligible_df,
         top_n,
         safe_haven,
+        fill_by_score=fill_by_score,
     )
     for name in name_list:
         df[f"权重_{name}"] = filled_weights[f"权重_{name}"]

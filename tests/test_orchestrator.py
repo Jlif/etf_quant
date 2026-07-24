@@ -61,7 +61,7 @@ def test_dynamic_pool_effective_start_uses_earliest_etf():
             params={"dynamic_pool": True, "lookback": 20},
         )
 
-        result = fetch_pool_data(strategy, app_config, data_source)
+        result = fetch_pool_data(strategy, app_config, data_source, skip_download=False)
         assert result["close"].index[0].strftime("%Y%m%d") == "20200102"
     finally:
         shutil.rmtree(cache_dir, ignore_errors=True)
@@ -94,7 +94,7 @@ def test_dynamic_pool_false_effective_start_uses_latest_etf():
             params={"dynamic_pool": False, "lookback": 20},
         )
 
-        result = fetch_pool_data(strategy, app_config, data_source)
+        result = fetch_pool_data(strategy, app_config, data_source, skip_download=False)
         # 默认模式下，要等待所有 ETF 到齐并完成 lookback 预热
         assert result["close"].index[0].strftime("%Y%m%d") == "20241209"
     finally:
@@ -123,7 +123,9 @@ def test_fetch_pool_data_cutoff_date():
         )
 
         cutoff = pd.Timestamp("2020-03-15")
-        result = fetch_pool_data(strategy, app_config, data_source, cutoff_date=cutoff)
+        result = fetch_pool_data(
+            strategy, app_config, data_source, cutoff_date=cutoff, skip_download=False
+        )
         assert result["close"].index[-1].date() == cutoff.date()
     finally:
         shutil.rmtree(cache_dir, ignore_errors=True)
@@ -151,7 +153,11 @@ def test_fetch_pool_data_start_date_override():
         )
 
         result = fetch_pool_data(
-            strategy, app_config, data_source, start_date="20200301"
+            strategy,
+            app_config,
+            data_source,
+            start_date="20200301",
+            skip_download=False,
         )
         # start_date 被覆盖后，数据从 2020-03-01 开始；默认 momentum 需要 lookback+1=21 天预热
         assert result["close"].index[0].strftime("%Y%m%d") == "20200321"
@@ -259,7 +265,7 @@ def test_fetch_pool_data_preserves_longer_cache_on_limited_download():
 
         # 先写入全量缓存
         ds_full = _MockDataSource(data_map_full)
-        fetch_pool_data(strategy, app_config, ds_full, silent=True)
+        fetch_pool_data(strategy, app_config, ds_full, silent=True, skip_download=False)
 
         # 再用 cutoff 超出缓存末端的短历史下载，强制触发合并
         ds_recent = _MockDataSource(data_map_recent)
@@ -271,6 +277,7 @@ def test_fetch_pool_data_preserves_longer_cache_on_limited_download():
             cutoff_date=cutoff,
             start_date="20200701",
             silent=True,
+            skip_download=False,
         )
 
         # 返回结果按 cutoff 截断

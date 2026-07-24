@@ -127,30 +127,11 @@ def main():
     print(f"策略数: {len(enabled_strategies)}")
     print("="*60)
 
-    # 检查缓存
-    cache_dir = app_config.backtest.cache_dir
-    provider = app_config.data_source.provider
-    required_codes = {
-        p.code
-        for s in enabled_strategies
-        for p in s.pool
-    }
-
-    all_cached = all(
-        os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
-        for code in required_codes
-    )
-    skip_test = all_cached and not args.today
-    if skip_test:
-        print(f"[缓存] 所有 {len(required_codes)} 个 ETF 已缓存，跳过数据源连通性测试")
-    elif args.today:
-        print(f"[刷新] 将重新拉取 {len(required_codes)} 个 ETF 的最新行情数据")
-
-    # 初始化数据源
+    # 初始化数据源（只用于识别 provider，不触发网络请求）
     data_source = get_data_source(
         name=provider,
-        fallback=True,
-        skip_test=skip_test,
+        fallback=False,
+        skip_test=True,
     )
 
     # 运行启用的策略
@@ -168,6 +149,7 @@ def main():
                 cutoff_date=cutoff_date,
                 start_date=start_date,
                 min_bars=min_bars,
+                skip_download=True,
             )
             result, name_list = run_strategy(
                 strategy,

@@ -173,7 +173,7 @@ def fetch_pool_data(
     start_date: str | None = None,
     min_bars: int | None = None,
     silent: bool = False,
-    skip_download: bool = False,
+    skip_download: bool = True,
 ) -> dict[str, pd.DataFrame]:
     """获取策略候选池 OHLC 数据，自动对齐起始日期并修正异常复权跳空。
 
@@ -296,7 +296,8 @@ def fetch_pool_data(
                     cached_dfs[code] = df
                 else:
                     raise ValueError(
-                        f"跳过下载模式下 {code} ({name}) 无本地缓存可用"
+                        f"{code} ({name}) 无本地缓存，"
+                        f"请先运行 python fetch_data.py --config ... 拉取数据"
                     )
             else:
                 download_tasks.append((code, cache_file, meta_file, df))

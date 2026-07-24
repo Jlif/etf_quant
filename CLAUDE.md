@@ -14,6 +14,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 安装依赖
 pip install -r requirements.txt
 
+# 拉取数据（必须先执行，回测/信号只读本地缓存）
+python fetch_data.py
+python fetch_data.py --config my_config.yaml
+python fetch_data.py --today          # 强制拉取到最新交易日
+
 # 运行回测（默认使用 config.yaml）
 python main.py
 
@@ -26,18 +31,20 @@ python main.py --config my_config.yaml
 ### 数据流
 
 ```
-config.yaml → utils/config.py (AppConfig) → main.py
-                                              ↓
-                    data_source/ (akshare | yfinance) → data_cache/ (CSV 缓存)
-                                              ↓
-                    strategy/ (rotation | weighted) → core/report.py → output/ (图表 + HTML 报告)
+config.yaml → utils/config.py (AppConfig)
+                  ↓
+        fetch_data.py ──→ data_source/ (akshare 东财接口) ──→ data_cache/ (CSV 缓存 + .meta.json)
+                  ↓
+        main.py / latest_signal.py / risk_param_sweep.py 只读缓存
+                  ↓
+        strategy/ (rotation | weighted) → core/report.py → output/ (图表 + HTML 报告)
 ```
 
 ### 核心模块
 
 - **`data_source/`**：数据源抽象层
   - `BaseDataSource` 定义 `fetch(code, start, end)` 接口，返回以日期为索引、code 为列名的收盘价 DataFrame
-  - `get_data_source()` 支持自动探测和 fallback（默认 akshare → yfinance），会先用 510300 做连通性测试
+  - `get_data_source()` 支持按名称初始化数据源；`fetch_data.py` 默认使用 `akshare` 东财接口且不 fallback，回测/信号入口通过 `skip_test=True` 避免连通性测试
   - `YFinanceDataSource` 对深市 ETF（如 159915）自动加 `.SZ` 后缀，其余加 `.SS`
 
 - **`strategy/`**：策略实现
@@ -56,10 +63,11 @@ config.yaml → utils/config.py (AppConfig) → main.py
 
 ### 关键设计
 
-- **数据缓存**：下载的 ETF 数据按 `data_cache/{code}_{provider}.csv` 缓存，不会自动过期，如需更新需手动删除
-- **复权跳空修正**：`main.py` 中的 `detect_and_fix_price_jumps()` 会检测日收益率绝对值超过 30% 的异常点（yfinance 对国内 ETF 复权偶尔出错），通过整体缩放前期价格修复
-- **策略实际起始日**：取 `max(配置起始日, 所有 ETF 中最晚的数据起始日)`，并在日志中提示
-- **输出目录**：每次运行会清空 `output/` 目录，生成 HTML 报告和 PNG 图表
+- **数据获取与使用解耦**：`fetch_data.py` 是唯一会发起网络请求的入口，默认使用 akshare 东财接口，标的之间 `time.sleep(1)` 限速；`main.py`、`latest_signal.py`、`risk_param_sweep.py` 默认只读本地缓存，不触发任何下载。
+- **数据缓存**：下载的 ETF 数据按 `data_cache/{code}_{provider}.csv` 缓存，并伴随 `.meta.json` 记录是否已复权；不会自动过期，如需更新请重新运行 `fetch_data.py`。
+- **复权跳空修正**：`main.py` 中的 `detect_and_fix_price_jumps()` 会检测日收益率绝对值超过 30% 的异常点（yfinance 对国内 ETF 复权偶尔出错），通过整体缩放前期价格修复。
+- **策略实际起始日**：取 `max(配置起始日, 所有 ETF 中最晚的数据起始日)`，并在日志中提示。
+- **输出目录**：每次运行会清空 `output/` 目录，生成 HTML 报告和 PNG 图表。
 
 ### 配置示例（config.yaml）
 

@@ -60,29 +60,11 @@ def main():
     # 清空 output 目录
     clear_output_dir(OUTPUT_DIR)
 
-    # 检查所有启用策略的 ETF 是否都已缓存
-    cache_dir = app_config.backtest.cache_dir
-    provider = app_config.data_source.provider
-    required_codes = {
-        p.code
-        for s in enabled_strategies
-        for p in s.pool
-    }
-    missing_codes = [
-        code for code in required_codes
-        if not os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
-    ]
-    skip_test = not missing_codes and not args.today
-    if skip_test:
-        print(f"[缓存] 所有 {len(required_codes)} 个 ETF 已缓存，跳过数据源连通性测试")
-    elif args.today:
-        print(f"[刷新] 将重新拉取 {len(required_codes)} 个 ETF 的最新行情数据")
-
-    # 初始化数据源
+    # 初始化数据源（只用于识别 provider，不触发网络请求）
     data_source = get_data_source(
         name=provider,
-        fallback=True,
-        skip_test=skip_test,
+        fallback=False,
+        skip_test=True,
     )
 
     # 运行启用的策略
@@ -92,7 +74,13 @@ def main():
         if not strategy.enabled:
             print(f"\n[跳过] 策略 '{strategy.name}' (enabled=false)")
             continue
-        result, name_list = run_strategy(strategy, app_config, data_source, include_today=args.today)
+        result, name_list = run_strategy(
+            strategy,
+            app_config,
+            data_source,
+            include_today=args.today,
+            skip_download=True,
+        )
         all_results[strategy.name] = (result, name_list)
         nav_series[strategy.name] = result["轮动策略净值"]
 

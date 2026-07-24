@@ -94,7 +94,7 @@ DEFAULTS = {
     "sharpe_threshold": None,
     "start_date": None,
     "end_date": None,
-    "no_fetch": False,
+    "no_fetch": True,
     "today": False,
 }
 
@@ -790,12 +790,12 @@ def main():
     parser.add_argument(
         "--today",
         action="store_true",
-        help="拉取当天最新行情数据（默认使用缓存/历史数据）",
+        help="读取包含最新交易日的缓存（不会触发下载）",
     )
     parser.add_argument(
         "--no-fetch",
         action="store_true",
-        help="强制使用本地缓存，不触发任何数据下载或更新（需先通过 main 下载好数据）",
+        help="强制使用本地缓存，不触发任何数据下载或更新（默认已启用）",
     )
     parser.add_argument(
         "--start-date",
@@ -881,20 +881,10 @@ def main():
         f"\n"
     )
 
-    cache_dir = app_config.backtest.cache_dir
-    provider = app_config.data_source.provider
-    required_codes = {p.code for s in enabled_strategies for p in s.pool}
-    missing_codes = [
-        code
-        for code in required_codes
-        if not os.path.exists(os.path.join(cache_dir, f"{code}_{provider}.csv"))
-    ]
-    skip_test = merged["no_fetch"] or (not missing_codes and not merged["today"])
-
     data_source = get_data_source(
         name=provider,
-        fallback=True,
-        skip_test=skip_test,
+        fallback=False,
+        skip_test=True,
     )
 
     cutoff_date = datetime.strptime(merged["end_date"], "%Y%m%d") if merged["end_date"] else None
@@ -905,7 +895,7 @@ def main():
         include_today=merged["today"],
         cutoff_date=cutoff_date,
         start_date=merged["start_date"],
-        skip_download=merged["no_fetch"],
+        skip_download=True,
     )
 
     os.makedirs(os.path.dirname(merged["output"]) or ".", exist_ok=True)

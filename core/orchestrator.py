@@ -247,6 +247,16 @@ def fetch_pool_data(
                     data_source.adjusted = meta.get("adjusted", True)
 
                 cache_covers_start = df.index[0] <= target_start_dt + timedelta(days=30)
+                if skip_download:
+                    # 只读缓存模式下直接使用本地缓存，不再做覆盖范围检查
+                    if not silent:
+                        print(f"  [缓存] {code} ({name})")
+                    if cutoff_date is not None:
+                        df = _filter_by_cutoff(df, cutoff_date)
+                    cached_dfs[code] = df
+                    cache_sufficient = True
+                    continue
+
                 if cutoff_date is not None:
                     df_before = _filter_by_cutoff(df, cutoff_date)
                     last_date = df_before.index[-1] if not df_before.empty else None

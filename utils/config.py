@@ -10,7 +10,7 @@ import yaml
 
 @dataclass
 class DataSourceConfig:
-    provider: Literal["akshare"] = "akshare"
+    provider: Literal["akshare", "yfinance"] = "akshare"
 
 
 @dataclass
@@ -47,6 +47,62 @@ class AppConfig:
     strategies: list[StrategyConfig] = field(default_factory=list)
 
 
+def _validate_weights(s: dict, pool: list[PoolItem]) -> None:
+    """校验 weighted 策略权重之和是否为 100%。"""
+    if s.get("mode") != "weighted":
+        return
+    total = sum(p.weight for p in pool)
+    if abs(total - 100) > 0.1:
+        raise ValueError(
+            f'策略 "{s["name"]}" 权重之和为 {total}%，必须等于 100%'
+        )
+
+
+def _validate_adaptive_scoring(s: dict, pool: list[PoolItem]) -> None:
+    """校验 adaptive_scoring 模式下是否配置了 benchmark。"""
+    params = s.get("params", {})
+    if not params.get("adaptive_scoring"):
+        return
+    has_sector = any(p.type == "行业" for p in pool)
+    if not has_sector:
+        return
+    benchmark = params.get("benchmark")
+    if not benchmark:
+        raise ValueError(
+            f'策略 "{s["name"]}" 开启 adaptive_scoring 且包含行业时，'
+            f'必须在 params 中配置 benchmark'
+        )
+    pool_names = {p.name for p in pool}
+    if benchmark not in pool_names:
+        raise ValueError(
+            f'策略 "{s["name"]}" 的 benchmark "{benchmark}" 不在 pool 中，'
+            f'可用的标的: {sorted(pool_names)}'
+        )
+
+
+def _validate_safe_haven(s: dict, pool: list[PoolItem]) -> None:
+    """校验开启 layer1/layer2 风控时是否配置了有效的 safe_haven。"""
+    params = s.get("params", {})
+    risk_control = params.get("risk_control", {})
+    needs_safe_haven = (
+        risk_control.get("layer1", {}).get("enabled", False)
+        or risk_control.get("layer2", {}).get("enabled", False)
+    )
+    if not needs_safe_haven:
+        return
+    safe_haven = params.get("safe_haven")
+    if not safe_haven:
+        raise ValueError(
+            f'策略 "{s["name"]}" 开启 risk_control.layer1/layer2 时必须配置 safe_haven'
+        )
+    pool_names = {p.name for p in pool}
+    if safe_haven not in pool_names:
+        raise ValueError(
+            f'策略 "{s["name"]}" 的 safe_haven "{safe_haven}" 不在 pool 中，'
+            f'可用的标的: {sorted(pool_names)}'
+        )
+
+
 def load_config(path: str = "config.yaml") -> AppConfig:
     """从 YAML 文件加载配置"""
     with open(path, "r", encoding="utf-8") as f:
@@ -58,50 +114,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     strategies = []
     for s in raw.get("strategies", []):
         pool = [PoolItem(**item) for item in s.get("pool", [])]
-        # 校验权重
-        if s.get("mode") == "weighted":
-            total = sum(p.weight for p in pool)
-            if abs(total - 100) > 0.1:
-                raise ValueError(
-                    f'策略 "{s["name"]}" 权重之和为 {total}%，必须等于 100%'
-                )
-
-        # 校验 adaptive_scoring 的 benchmark 参数
-        params = s.get("params", {})
-        if params.get("adaptive_scoring"):
-            has_sector = any(p.type == "行业" for p in pool)
-            if has_sector:
-                benchmark = params.get("benchmark")
-                if not benchmark:
-                    raise ValueError(
-                        f'策略 "{s["name"]}" 开启 adaptive_scoring 且包含行业时，'
-                        f'必须在 params 中配置 benchmark'
-                    )
-                pool_names = {p.name for p in pool}
-                if benchmark not in pool_names:
-                    raise ValueError(
-                        f'策略 "{s["name"]}" 的 benchmark "{benchmark}" 不在 pool 中，'
-                        f'可用的标的: {sorted(pool_names)}'
-                    )
-
-        # 校验需要 safe_haven 的风控参数
-        risk_control = params.get("risk_control", {})
-        needs_safe_haven = (
-            risk_control.get("layer1", {}).get("enabled", False)
-            or risk_control.get("layer2", {}).get("enabled", False)
-        )
-        if needs_safe_haven:
-            safe_haven = params.get("safe_haven")
-            if not safe_haven:
-                raise ValueError(
-                    f'策略 "{s["name"]}" 开启 risk_control.layer1/layer2 时必须配置 safe_haven'
-                )
-            pool_names = {p.name for p in pool}
-            if safe_haven not in pool_names:
-                raise ValueError(
-                    f'策略 "{s["name"]}" 的 safe_haven "{safe_haven}" 不在 pool 中，'
-                    f'可用的标的: {sorted(pool_names)}'
-                )
+        _validate_weights(s, pool)
+        _validate_adaptive_scoring(s, pool)
+        _validate_safe_haven(s, pool)
         strategies.append(
             StrategyConfig(
                 name=s["name"],

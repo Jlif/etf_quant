@@ -23,47 +23,14 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-import unicodedata
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from data_source import get_data_source
 from core.orchestrator import fetch_pool_data, run_strategy
+from core.metrics import compute_metrics, compute_sharpe
 from utils import load_config
-
-
-def compute_metrics(nav: pd.Series) -> tuple[float, float, float]:
-    """从净值序列计算总收益、年化收益率（CAGR）和最大回撤。"""
-    total_return = nav.iloc[-1] / nav.iloc[0] - 1.0
-    n_years = len(nav) / 252.0
-    cagr = (
-        (nav.iloc[-1] / nav.iloc[0]) ** (1.0 / n_years) - 1.0
-        if n_years > 0 and nav.iloc[0] > 0
-        else 0.0
-    )
-    running_max = nav.expanding().max()
-    drawdown = (nav - running_max) / running_max
-    max_drawdown = drawdown.min()
-    return total_return, cagr, max_drawdown
-
-
-
-def _display_width(s: str) -> int:
-    """计算字符串在终端中的显示宽度（中文等宽字符按 2 计）。"""
-    return sum(
-        2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
-        for ch in str(s)
-    )
-
-
-def _rjust(s: str, width: int) -> str:
-    """按显示宽度右对齐。"""
-    return " " * max(0, width - _display_width(s)) + s
-
-
-def _ljust(s: str, width: int) -> str:
-    """按显示宽度左对齐。"""
-    return s + " " * max(0, width - _display_width(s))
+from utils.text import display_width, ljust, rjust
 
 
 @dataclass
@@ -156,13 +123,6 @@ def _resolve_list(value, parser):
     return [value]
 
 
-def _compute_sharpe(nav: pd.Series) -> float:
-    """从净值序列计算年化夏普比率（无风险利率假设为 0）。"""
-    daily_returns = nav.pct_change().dropna()
-    if daily_returns.std() == 0 or len(daily_returns) < 2:
-        return 0.0
-    return (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
-
 BASELINE_DEFAULTS = {
     "lookback": 20,
     "l1_ma_lookback": 13,
@@ -177,6 +137,17 @@ BASELINE_DEFAULTS = {
     "l3_caution_scale": 0.5,
     "l3_transition_power": 4,
 }
+
+
+_LEGACY_RISK_KEYS = (
+    "absolute_momentum_filter",
+    "absolute_momentum_cash",
+    "absolute_momentum_lookback",
+    "absolute_momentum_threshold",
+    "target_volatility",
+    "volatility_lookback",
+    "trailing_stop_pct",
+)
 
 
 def _get_baseline_values(strategy) -> dict:
@@ -228,15 +199,7 @@ def _run_single(
     params["lookback"] = lookback
 
     # 清理旧风控参数
-    for old_key in (
-        "absolute_momentum_filter",
-        "absolute_momentum_cash",
-        "absolute_momentum_lookback",
-        "absolute_momentum_threshold",
-        "target_volatility",
-        "volatility_lookback",
-        "trailing_stop_pct",
-    ):
+    for old_key in _LEGACY_RISK_KEYS:
         params.pop(old_key, None)
 
     params["risk_control"] = _build_risk_control(
@@ -260,7 +223,7 @@ def _run_single(
         )
         nav = result["轮动策略净值"]
         total_return, cagr, max_dd = compute_metrics(nav)
-        sharpe = _compute_sharpe(nav)
+        sharpe = compute_sharpe(nav)
         return SweepResult(
             lookback=lookback,
             l1_ma_lookback=l1_ma_lookback,
@@ -405,15 +368,7 @@ def sweep_risk_params(
         params["lookback"] = lookback
 
         # 清理旧风控参数，避免与三层风控冲突
-        for old_key in (
-            "absolute_momentum_filter",
-            "absolute_momentum_cash",
-            "absolute_momentum_lookback",
-            "absolute_momentum_threshold",
-            "target_volatility",
-            "volatility_lookback",
-            "trailing_stop_pct",
-        ):
+        for old_key in _LEGACY_RISK_KEYS:
             params.pop(old_key, None)
 
         params["risk_control"] = _build_risk_control(
@@ -438,7 +393,7 @@ def sweep_risk_params(
             )
             nav = result["轮动策略净值"]
             total_return, cagr, max_dd = compute_metrics(nav)
-            sharpe = _compute_sharpe(nav)
+            sharpe = compute_sharpe(nav)
             results.append(
                 SweepResult(
                     lookback=lookback,
@@ -562,18 +517,18 @@ def print_sequential_results(
         table_width = sum(w for _, w, _ in col_specs) + len(col_specs) - 1
         print("-" * table_width)
         header = " ".join(
-            _ljust(c, w) if a == "l" else _rjust(c, w)
+            ljust(c, w) if a == "l" else rjust(c, w)
             for c, w, a in col_specs
         )
         print(header)
         print("-" * table_width)
         for v, r in items_sorted[:top_n]:
             row = " ".join([
-                _ljust(str(v), 18),
-                _rjust(f"{r.cagr:+.2%}", 10),
-                _rjust(f"{r.sharpe:.2f}", 10),
-                _rjust(f"{r.max_drawdown:+.2%}", 10),
-                _rjust(f"{r.final_nav:.4f}", 10),
+                ljust(str(v), 18),
+                rjust(f"{r.cagr:+.2%}", 10),
+                rjust(f"{r.sharpe:.2f}", 10),
+                rjust(f"{r.max_drawdown:+.2%}", 10),
+                rjust(f"{r.final_nav:.4f}", 10),
             ])
             print(row)
 
@@ -630,23 +585,23 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
     }
 
     headers = [
-        _rjust("lookback", col_widths["lookback"]),
-        _rjust("l1_ma", col_widths["l1_ma"]),
-        _rjust("l1_dd_lb", col_widths["l1_dd_lb"]),
-        _rjust("l1_dd", col_widths["l1_dd"]),
-        _rjust("l2_mul", col_widths["l2_mul"]),
-        _rjust("l2_lb", col_widths["l2_lb"]),
-        _rjust("l3_vol", col_widths["l3_vol"]),
-        _rjust("l3_lb", col_widths["l3_lb"]),
-        _rjust("l3_com", col_widths["l3_com"]),
-        _rjust("l3_cau", col_widths["l3_cau"]),
-        _rjust("l3_scl", col_widths["l3_scl"]),
-        _rjust("l3_pwr", col_widths["l3_pwr"]),
-        _rjust("总收益", col_widths["总收益"]),
-        _rjust("CAGR", col_widths["CAGR"]),
-        _rjust("最大回撤", col_widths["最大回撤"]),
-        _rjust("夏普", col_widths["夏普"]),
-        _rjust("最终净值", col_widths["最终净值"]),
+        rjust("lookback", col_widths["lookback"]),
+        rjust("l1_ma", col_widths["l1_ma"]),
+        rjust("l1_dd_lb", col_widths["l1_dd_lb"]),
+        rjust("l1_dd", col_widths["l1_dd"]),
+        rjust("l2_mul", col_widths["l2_mul"]),
+        rjust("l2_lb", col_widths["l2_lb"]),
+        rjust("l3_vol", col_widths["l3_vol"]),
+        rjust("l3_lb", col_widths["l3_lb"]),
+        rjust("l3_com", col_widths["l3_com"]),
+        rjust("l3_cau", col_widths["l3_cau"]),
+        rjust("l3_scl", col_widths["l3_scl"]),
+        rjust("l3_pwr", col_widths["l3_pwr"]),
+        rjust("总收益", col_widths["总收益"]),
+        rjust("CAGR", col_widths["CAGR"]),
+        rjust("最大回撤", col_widths["最大回撤"]),
+        rjust("夏普", col_widths["夏普"]),
+        rjust("最终净值", col_widths["最终净值"]),
     ]
 
     total_width = sum(col_widths.values()) + len(col_widths) - 1
@@ -657,23 +612,23 @@ def print_results(results: list[SweepResult], sort_by: str = "cagr") -> None:
     print("-" * total_width)
     for r in sorted_results:
         row = [
-            _rjust(str(r.lookback), col_widths["lookback"]),
-            _rjust(str(r.l1_ma_lookback), col_widths["l1_ma"]),
-            _rjust(str(r.l1_drawdown_lookback), col_widths["l1_dd_lb"]),
-            _rjust(f"{r.l1_drawdown_threshold:.1%}", col_widths["l1_dd"]),
-            _rjust(f"{r.l2_atr_multiplier:.1f}", col_widths["l2_mul"]),
-            _rjust(str(r.l2_atr_lookback), col_widths["l2_lb"]),
-            _rjust(f"{r.l3_target_vol:.1%}", col_widths["l3_vol"]),
-            _rjust(str(r.l3_vol_lookback), col_widths["l3_lb"]),
-            _rjust(f"{r.l3_comfort_zone:.1%}", col_widths["l3_com"]),
-            _rjust(f"{r.l3_caution_zone:.1%}", col_widths["l3_cau"]),
-            _rjust(f"{r.l3_caution_scale:.1f}", col_widths["l3_scl"]),
-            _rjust("None" if r.l3_transition_power is None else f"{r.l3_transition_power:.1f}", col_widths["l3_pwr"]),
-            _rjust(f"{r.total_return:+.2%}", col_widths["总收益"]),
-            _rjust(f"{r.cagr:+.2%}", col_widths["CAGR"]),
-            _rjust(f"{r.max_drawdown:+.2%}", col_widths["最大回撤"]),
-            _rjust(f"{r.sharpe:.2f}", col_widths["夏普"]),
-            _rjust(f"{r.final_nav:.4f}", col_widths["最终净值"]),
+            rjust(str(r.lookback), col_widths["lookback"]),
+            rjust(str(r.l1_ma_lookback), col_widths["l1_ma"]),
+            rjust(str(r.l1_drawdown_lookback), col_widths["l1_dd_lb"]),
+            rjust(f"{r.l1_drawdown_threshold:.1%}", col_widths["l1_dd"]),
+            rjust(f"{r.l2_atr_multiplier:.1f}", col_widths["l2_mul"]),
+            rjust(str(r.l2_atr_lookback), col_widths["l2_lb"]),
+            rjust(f"{r.l3_target_vol:.1%}", col_widths["l3_vol"]),
+            rjust(str(r.l3_vol_lookback), col_widths["l3_lb"]),
+            rjust(f"{r.l3_comfort_zone:.1%}", col_widths["l3_com"]),
+            rjust(f"{r.l3_caution_zone:.1%}", col_widths["l3_cau"]),
+            rjust(f"{r.l3_caution_scale:.1f}", col_widths["l3_scl"]),
+            rjust("None" if r.l3_transition_power is None else f"{r.l3_transition_power:.1f}", col_widths["l3_pwr"]),
+            rjust(f"{r.total_return:+.2%}", col_widths["总收益"]),
+            rjust(f"{r.cagr:+.2%}", col_widths["CAGR"]),
+            rjust(f"{r.max_drawdown:+.2%}", col_widths["最大回撤"]),
+            rjust(f"{r.sharpe:.2f}", col_widths["夏普"]),
+            rjust(f"{r.final_nav:.4f}", col_widths["最终净值"]),
         ]
         print(" ".join(row))
     print("=" * total_width)

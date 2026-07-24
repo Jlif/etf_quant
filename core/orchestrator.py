@@ -6,35 +6,81 @@
 
 from __future__ import annotations
 
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
 import os
-import unicodedata
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 
 from strategy import rotation, weighted
+from strategy._common import required_window, weight_col
 from utils import AppConfig, StrategyConfig
+from utils.text import display_width, ljust, rjust
+from core.report import OUTPUT_DIR, performance_report
 
 
-def _display_width(s: str) -> int:
-    """计算字符串在终端中的显示宽度（中文等宽字符按 2 计）。"""
-    return sum(
-        2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
-        for ch in str(s)
+def clear_output_dir(output_dir: str = OUTPUT_DIR) -> None:
+    """清空输出目录。"""
+    if os.path.exists(output_dir):
+        for f in os.listdir(output_dir):
+            os.remove(os.path.join(output_dir, f))
+
+
+def calculate_benchmark_returns(
+    result: pd.DataFrame, name_list: list[str]
+) -> pd.Series | None:
+    """从 rotation/weighted 结果中提取首个标的的日收益率序列作为 benchmark。"""
+    benchmark_col = f"{name_list[0]}净值"
+    benchmark_series = result[benchmark_col] if benchmark_col in result.columns else None
+    if benchmark_series is None:
+        return None
+    returns = benchmark_series.pct_change(fill_method=None).fillna(0)
+    returns.name = benchmark_col
+    return returns
+
+
+def save_holding_csv(
+    holding_df: pd.DataFrame,
+    strategy_name: str,
+    output_dir: str = OUTPUT_DIR,
+) -> str | None:
+    """保存 rotation 策略的每日持仓记录 CSV。"""
+    if holding_df is None or holding_df.empty:
+        return None
+    safe_name = strategy_name.replace(" ", "_").replace(":", "_")
+    csv_path = os.path.join(output_dir, f"{safe_name}_持仓记录.csv")
+    holding_df.to_csv(csv_path, encoding="utf-8-sig")
+    return csv_path
+
+
+def report_strategy_result(
+    strategy: StrategyConfig,
+    result: pd.DataFrame,
+    name_list: list[str],
+) -> None:
+    """为单个策略输出绩效报告、持仓 CSV 与收益贡献统计。"""
+    strategy_returns = result["轮动策略净值"].pct_change(fill_method=None).fillna(0)
+    strategy_returns.name = "轮动策略净值"
+
+    benchmark_returns = calculate_benchmark_returns(result, name_list)
+    holding_df = build_holding_df(result)
+
+    performance_report(
+        strategy_returns,
+        benchmark=benchmark_returns,
+        title=f"{strategy.name}回测报告",
+        holding_df=holding_df,
     )
 
+    if strategy.mode == "rotation":
+        print_position_contribution(strategy, result, name_list)
 
-def _ljust(s: str, width: int) -> str:
-    """按显示宽度左对齐。"""
-    return s + " " * max(0, width - _display_width(s))
-
-
-def _rjust(s: str, width: int) -> str:
-    """按显示宽度右对齐。"""
-    return " " * max(0, width - _display_width(s)) + s
+    csv_path = save_holding_csv(holding_df, strategy.name)
+    if csv_path:
+        print(f"[持仓记录已保存] {csv_path}")
+        print_holding_summary(holding_df, strategy.name)
 
 
 def detect_and_fix_price_jumps(
@@ -407,9 +453,9 @@ def fetch_pool_data(
     dynamic_pool = strategy.params.get("dynamic_pool", False)
 
     if not silent:
-        max_name_width = max(_display_width(name) for name in actual_starts)
+        max_name_width = max(display_width(name) for name in actual_starts)
         start_lines = "\n".join(
-            f"      {_ljust(name, max_name_width)} : {d.date()}"
+            f"      {ljust(name, max_name_width)} : {d.date()}"
             for name, d in sorted(actual_starts.items(), key=lambda x: x[1])
         )
         print("  [数据] 各 ETF 数据起始日期:")
@@ -422,7 +468,7 @@ def fetch_pool_data(
         lookback = strategy.params.get("lookback", 20)
         required_starts = {}
         for name in data_close.columns:
-            window = rotation._adaptive_window(name_types.get(name), lookback)
+            window = required_window(name_types.get(name), lookback)
             etf_series = all_close[name]
             if len(etf_series) >= window:
                 required_starts[name] = etf_series.index[window - 1]
@@ -575,15 +621,15 @@ def print_latest_signal(
                 vol_map[name] = np.nan
 
         header = (
-            f"{_ljust('排名', 4)} "
-            f"{_ljust('ETF名称', 20)} "
-            f"{_ljust('代码', 10)} "
-            f"{_ljust('最新行情日', 12)} "
-            f"{_ljust('周期动量得分', 12)} "
-            f"{_ljust('波动率', 10)} "
-            f"{_ljust('目前持仓仓位', 12)} "
-            f"{_ljust('建议下日仓位', 12)} "
-            f"{_ljust('未入选原因', 12)}"
+            f"{ljust('排名', 4)} "
+            f"{ljust('ETF名称', 20)} "
+            f"{ljust('代码', 10)} "
+            f"{ljust('最新行情日', 12)} "
+            f"{ljust('周期动量得分', 12)} "
+            f"{ljust('波动率', 10)} "
+            f"{ljust('目前持仓仓位', 12)} "
+            f"{ljust('建议下日仓位', 12)} "
+            f"{ljust('未入选原因', 12)}"
         )
         print(header)
         print("-" * 112)
@@ -593,7 +639,7 @@ def print_latest_signal(
             score_col = f"{prefix}{name}"
             score = latest[score_col] if score_col in latest else np.nan
             # 目前持仓仓位：shift 后的实际持仓
-            current_weight = latest[f"权重_{name}"] if f"权重_{name}" in latest else 0
+            current_weight = latest[weight_col(name)] if weight_col(name) in latest else 0
             # 建议下一交易日仓位：按最新日信号重新计算后的原始权重
             signal_weight_col = f"信号权重_{name}"
             signal_weight = (
@@ -634,15 +680,15 @@ def print_latest_signal(
             vol_str = f"{vol:.1%}" if not pd.isna(vol) else "-"
             rank_str = f"{marker}{i}"
             row = (
-                f"{_ljust(rank_str, 4)} "
-                f"{_ljust(name, 20)} "
-                f"{_ljust(code, 10)} "
-                f"{_ljust(last_date, 12)} "
-                f"{_ljust(score_str, 12)} "
-                f"{_ljust(vol_str, 10)} "
-                f"{_ljust(current_weight_pct, 12)} "
-                f"{_ljust(signal_weight_pct, 12)} "
-                f"{_ljust(reason, 12)}"
+                f"{ljust(rank_str, 4)} "
+                f"{ljust(name, 20)} "
+                f"{ljust(code, 10)} "
+                f"{ljust(last_date, 12)} "
+                f"{ljust(score_str, 12)} "
+                f"{ljust(vol_str, 10)} "
+                f"{ljust(current_weight_pct, 12)} "
+                f"{ljust(signal_weight_pct, 12)} "
+                f"{ljust(reason, 12)}"
             )
             print(row)
 
@@ -667,10 +713,10 @@ def print_latest_signal(
 
     elif strategy.mode == "weighted":
         header = (
-            f"{_ljust('ETF名称', 20)} "
-            f"{_ljust('代码', 10)} "
-            f"{_ljust('目标权重', 10)} "
-            f"{_ljust('当前权重', 10)}"
+            f"{ljust('ETF名称', 20)} "
+            f"{ljust('代码', 10)} "
+            f"{ljust('目标权重', 10)} "
+            f"{ljust('当前权重', 10)}"
         )
         print(header)
         print("-" * 54)
@@ -680,10 +726,10 @@ def print_latest_signal(
             code = next((p.code for p in strategy.pool if p.name == name), "")
             target = weights.get(name, 0)
             row = (
-                f"{_ljust(name, 20)} "
-                f"{_ljust(code, 10)} "
-                f"{_ljust(f'{target:.0f}%', 10)} "
-                f"{_ljust('-', 10)}"
+                f"{ljust(name, 20)} "
+                f"{ljust(code, 10)} "
+                f"{ljust(f'{target:.0f}%', 10)} "
+                f"{ljust('-', 10)}"
             )
             print(row)
 
@@ -756,11 +802,11 @@ def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, 
     print(f"{'='*total_width}")
 
     headers = [
-        _ljust("ETF名称", col_widths["ETF名称"]),
-        _ljust("代码", col_widths["代码"]),
-        _ljust("持有天数", col_widths["持有天数"]),
-        _rjust("累计贡献", col_widths["累计贡献"]),
-        _rjust("贡献占比", col_widths["贡献占比"]),
+        ljust("ETF名称", col_widths["ETF名称"]),
+        ljust("代码", col_widths["代码"]),
+        ljust("持有天数", col_widths["持有天数"]),
+        rjust("累计贡献", col_widths["累计贡献"]),
+        rjust("贡献占比", col_widths["贡献占比"]),
     ]
     print(" ".join(headers))
     print("-" * total_width)
@@ -769,7 +815,7 @@ def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, 
     total_contribution = 0.0
     for name in name_list:
         code = next((p.code for p in strategy.pool if p.name == name), "")
-        hold_days = int((result[f"权重_{name}"] > 0).sum())
+        hold_days = int((result[weight_col(name)] > 0).sum())
         contrib_col = f"贡献_日收益_{name}"
         if contrib_col in result.columns:
             contribution = result[contrib_col].sum()
@@ -789,11 +835,11 @@ def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, 
         contrib_str = f"{contribution:+.2%}"
         ratio_str = f"{ratio:+.1%}"
         row = [
-            _ljust(name, col_widths["ETF名称"]),
-            _ljust(code, col_widths["代码"]),
-            _ljust(str(hold_days), col_widths["持有天数"]),
-            _rjust(contrib_str, col_widths["累计贡献"]),
-            _rjust(ratio_str, col_widths["贡献占比"]),
+            ljust(name, col_widths["ETF名称"]),
+            ljust(code, col_widths["代码"]),
+            ljust(str(hold_days), col_widths["持有天数"]),
+            rjust(contrib_str, col_widths["累计贡献"]),
+            rjust(ratio_str, col_widths["贡献占比"]),
         ]
         print(" ".join(row))
 

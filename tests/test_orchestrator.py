@@ -16,7 +16,7 @@ class _MockDataSource:
     def __init__(self, data_map):
         self._data = data_map
 
-    def fetch(self, code, start, end=None):
+    def fetch(self, code, start, end=None, **kwargs):
         df = self._data[code].copy()
         start_dt = pd.to_datetime(start)
         return df.loc[df.index >= start_dt]

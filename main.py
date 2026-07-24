@@ -18,23 +18,19 @@ import os
 import sys
 import warnings
 
-import pandas as pd
-
 # 确保本地模块可导入
 sys.path.insert(0, os.path.dirname(__file__))
 
 from data_source import get_data_source
 from core import (
     OUTPUT_DIR,
-    performance_report,
     plot_nav_curves,
     plot_strategy_comparison,
     print_summary,
 )
 from core.orchestrator import (
-    build_holding_df,
-    print_holding_summary,
-    print_position_contribution,
+    clear_output_dir,
+    report_strategy_result,
     run_strategy,
 )
 from utils import load_config
@@ -62,10 +58,7 @@ def main():
     print("="*60)
 
     # 清空 output 目录
-    output_dir = "./output"
-    if os.path.exists(output_dir):
-        for f in os.listdir(output_dir):
-            os.remove(os.path.join(output_dir, f))
+    clear_output_dir(OUTPUT_DIR)
 
     # 检查所有启用策略的 ETF 是否都已缓存
     cache_dir = app_config.backtest.cache_dir
@@ -103,37 +96,7 @@ def main():
         all_results[strategy.name] = (result, name_list)
         nav_series[strategy.name] = result["轮动策略净值"]
 
-        # 绩效报告
-        benchmark_col = f"{name_list[0]}净值"
-        benchmark_series = result[benchmark_col] if benchmark_col in result.columns else None
-        if benchmark_series is not None:
-            benchmark_returns = benchmark_series.pct_change(fill_method=None).fillna(0)
-            benchmark_returns.name = benchmark_col
-        else:
-            benchmark_returns = None
-
-        strategy_returns = result["轮动策略净值"].pct_change(fill_method=None).fillna(0)
-        strategy_returns.name = "轮动策略净值"
-
-        holding_df = build_holding_df(result)
-        performance_report(
-            strategy_returns,
-            benchmark=benchmark_returns,
-            title=f"{strategy.name}回测报告",
-            holding_df=holding_df,
-        )
-
-        # 输出各 ETF 持有天数与收益贡献占比（仅 rotation 策略）
-        if strategy.mode == "rotation":
-            print_position_contribution(strategy, result, name_list)
-
-        # 输出 rotation 策略每日持仓记录 CSV
-        if holding_df is not None and not holding_df.empty:
-            safe_name = strategy.name.replace(" ", "_").replace(":", "_")
-            csv_path = os.path.join(OUTPUT_DIR, f"{safe_name}_持仓记录.csv")
-            holding_df.to_csv(csv_path, encoding="utf-8-sig")
-            print(f"[持仓记录已保存] {csv_path}")
-            print_holding_summary(holding_df, strategy.name)
+        report_strategy_result(strategy, result, name_list)
 
     # 可视化
     plot_nav_curves(

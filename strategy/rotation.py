@@ -11,26 +11,12 @@ from core.scorer import (
     momentum_score,
     slope_r2_score,
 )
+from ._common import WEIGHT_PREFIX, parse_weight_cols, required_window, weight_col
 from .risk import (
     layer1_market_filter,
     layer2_atr_trailing_stop,
     layer3_vol_target_filter,
 )
-
-
-def _adaptive_window(etf_type: str | None, default_lookback: int) -> int:
-    """Return the rolling window needed for an ETF type's adaptive scorer."""
-    if etf_type == "行业":
-        return 62
-    if etf_type in {"红利", "自由现金流", "价值"}:
-        return 41
-    if etf_type == "成长":
-        return 21
-    if etf_type == "商品":
-        return 61
-    if etf_type == "宽基":
-        return 252
-    return default_lookback + 1
 
 
 def _fill_risk_shortfall(
@@ -55,10 +41,9 @@ def _fill_risk_shortfall(
       风控释放的仓位不再按得分补选新标的，直接全部买入 safe_haven，保持满仓。
     """
     adjusted = weights_df.copy()
-    weight_cols = [c for c in adjusted.columns if c.startswith("权重_")]
-    name_list = [c.replace("权重_", "") for c in weight_cols]
+    weight_cols, name_list = parse_weight_cols(adjusted)
     unit_weight = 1.0 / top_n if top_n > 0 else 0.0
-    safe_col = f"权重_{safe_haven}" if safe_haven and safe_haven in name_list else None
+    safe_col = weight_col(safe_haven) if safe_haven and safe_haven in name_list else None
     blocked_df = blocked_df if blocked_df is not None else pd.DataFrame(False, index=adjusted.index, columns=name_list)
 
     for date in adjusted.index:
@@ -83,7 +68,7 @@ def _fill_risk_shortfall(
 
             # 分配权重：每个入选标 1/top_n
             for name in selected:
-                adjusted.loc[date, f"权重_{name}"] = unit_weight
+                adjusted.loc[date, weight_col(name)] = unit_weight
 
             # 剩余缺口由 safe_haven 承接
             shortfall = 1.0 - adjusted.loc[date, weight_cols].sum()
@@ -155,7 +140,7 @@ def run(
         benchmark_series = close_df[benchmark_name] if benchmark_name else None
         for name in name_list:
             etf_type = type_map.get(name)
-            window = _adaptive_window(etf_type, lookback)
+            window = required_window(etf_type, lookback)
             df[f"自适应得分_{name}"] = df[name].rolling(window).apply(
                 lambda x: adaptive_momentum_score(
                     x,
@@ -194,7 +179,7 @@ def run(
         for name in name_list:
             etf_type = type_map.get(name)
             if params.get("adaptive_scoring"):
-                window = _adaptive_window(etf_type, lookback)
+                window = required_window(etf_type, lookback)
             elif scoring == "slope_r2" or scoring == "momentum_quality":
                 window = lookback
             else:
@@ -236,11 +221,11 @@ def run(
     rank_df = eligible_signal_df.rank(axis=1, ascending=False, method="first", na_option="keep")
     for name in name_list:
         col = f"{prefix}{name}"
-        df[f"权重_{name}"] = (rank_df[col] <= top_n).astype(float) / top_n
+        df[weight_col(name)] = (rank_df[col] <= top_n).astype(float) / top_n
 
     # dynamic_pool：可选 ETF 不足 top_n 时，剩余仓位优先填充已就绪的 safe_haven
     if dynamic_pool:
-        weight_cols = [f"权重_{n}" for n in name_list]
+        weight_cols = [weight_col(n) for n in name_list]
         for date in df.index:
             eligible_names = eligible_df.columns[eligible_df.loc[date]].tolist()
             selected_count = int((df.loc[date, weight_cols] > 0).sum())
@@ -248,7 +233,7 @@ def run(
                 fill_weight = (top_n - selected_count) / top_n
                 safe_haven = params.get("safe_haven")
                 if safe_haven and safe_haven in eligible_names:
-                    df.loc[date, f"权重_{safe_haven}"] += fill_weight
+                    df.loc[date, weight_col(safe_haven)] += fill_weight
             # 归一化，确保总权重为 1.0
             total_weight = df.loc[date, weight_cols].sum()
             if total_weight > 0:
@@ -261,7 +246,7 @@ def run(
         df[f"风控原因_{name}"] = ""
 
     # 记录风控前的原始轮动权重，用于识别被风控强制清零的标的
-    raw_weight_cols = [f"权重_{n}" for n in name_list]
+    raw_weight_cols = [weight_col(n) for n in name_list]
     raw_weights_df = df[raw_weight_cols].copy()
 
     # 3.05–3.7 三层风控系统
@@ -277,7 +262,7 @@ def run(
         drawdown_threshold = layer1.get("drawdown_threshold", 0.05)
         drawdown_lookback = layer1.get("drawdown_lookback", 252)
 
-        weight_cols = [f"权重_{n}" for n in name_list]
+        weight_cols = [weight_col(n) for n in name_list]
         weights_df = df[weight_cols].copy()
         pre_weights = weights_df.copy()
         adjusted_weights, l1_triggers = layer1_market_filter(
@@ -289,7 +274,7 @@ def run(
             drawdown_lookback=drawdown_lookback,
         )
         for name in name_list:
-            df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
+            df[weight_col(name)] = adjusted_weights[weight_col(name)]
 
         # 标的级别：逐只记录被清零的风险资产，细分均线/回撤原因
         for name in name_list:
@@ -299,7 +284,7 @@ def run(
             dd_trig = l1_triggers["drawdown"].get(name)
             if ma_trig is None or dd_trig is None:
                 continue
-            etf_triggered = (pre_weights[f"权重_{name}"] > 0) & (df[f"权重_{name}"] == 0)
+            etf_triggered = (pre_weights[weight_col(name)] > 0) & (df[weight_col(name)] == 0)
             if not etf_triggered.any():
                 continue
             ma_only = etf_triggered & ma_trig & ~dd_trig
@@ -329,7 +314,7 @@ def run(
         atr_multiplier = layer2.get("atr_multiplier", 3.0)
         atr_lookback = layer2.get("atr_lookback", 14)
 
-        weight_cols = [f"权重_{n}" for n in name_list]
+        weight_cols = [weight_col(n) for n in name_list]
         weights_df = df[weight_cols].copy()
         pre_weights = weights_df.copy()
         adjusted_weights = layer2_atr_trailing_stop(
@@ -342,11 +327,11 @@ def run(
             safe_haven=safe_haven,
         )
         for name in name_list:
-            df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
+            df[weight_col(name)] = adjusted_weights[weight_col(name)]
 
         risk_names = [n for n in name_list if n != safe_haven]
         for name in risk_names:
-            triggered = (pre_weights[f"权重_{name}"] > 0) & (df[f"权重_{name}"] == 0)
+            triggered = (pre_weights[weight_col(name)] > 0) & (df[weight_col(name)] == 0)
             if triggered.any():
                 df.loc[triggered, "风控原因"] += (
                     f"{name}: ATR跟踪止损(回落>{atr_multiplier}*ATR); "
@@ -364,7 +349,7 @@ def run(
         caution_scale = layer3.get("caution_scale", 0.5)
         transition_power = layer3.get("transition_power")
 
-        weight_cols = [f"权重_{n}" for n in name_list]
+        weight_cols = [weight_col(n) for n in name_list]
         weights_df = df[weight_cols].copy()
         pre_weights = weights_df.copy()
         adjusted_weights = layer3_vol_target_filter(
@@ -379,14 +364,14 @@ def run(
             transition_power=transition_power,
         )
         for name in name_list:
-            df[f"权重_{name}"] = adjusted_weights[f"权重_{name}"]
+            df[weight_col(name)] = adjusted_weights[weight_col(name)]
 
         # 标的级别：逐只判断是熔断（清零）还是压缩（降仓但未清零）
         for name in name_list:
             if name == safe_haven:
                 continue
-            pre_w = pre_weights[f"权重_{name}"]
-            post_w = df[f"权重_{name}"]
+            pre_w = pre_weights[weight_col(name)]
+            post_w = df[weight_col(name)]
             # 熔断：有仓变无仓
             panic = (pre_w > 0) & (post_w == 0)
             if panic.any():
@@ -414,7 +399,7 @@ def run(
     #     被风控强制清零的标的不再重新纳入，只从排名后续顺位递补。
     safe_haven = params.get("safe_haven")
     fill_by_score = params.get("fill_shortfall_by_score", True)
-    weight_cols = [f"权重_{n}" for n in name_list]
+    weight_cols = [weight_col(n) for n in name_list]
     weights_df = df[weight_cols].copy()
     blocked_df = (raw_weights_df > 0) & (weights_df == 0)
     blocked_df.columns = name_list
@@ -428,12 +413,12 @@ def run(
         blocked_df=blocked_df,
     )
     for name in name_list:
-        df[f"权重_{name}"] = filled_weights[f"权重_{name}"]
+        df[weight_col(name)] = filled_weights[weight_col(name)]
 
     # 4. 保存原始信号日权重和风控原因，供“今日交易信号”展示使用。
     #    回测收益仍使用 shift 后的持仓列，保持 T 日信号决定 T+1 日收益的逻辑。
     #    批量 concat 新增列，避免逐列 insert 导致 DataFrame 碎片化（PerformanceWarning）。
-    _signal_cols = {f"信号权重_{name}": df[f"权重_{name}"] for name in name_list}
+    _signal_cols = {f"信号权重_{name}": df[weight_col(name)] for name in name_list}
     _signal_cols.update(
         {f"信号风控原因_{name}": df[f"风控原因_{name}"] for name in name_list}
     )
@@ -442,7 +427,7 @@ def run(
 
     # 持仓权重前移1天（T日收盘后信号决定T+1日持仓）
     for name in name_list:
-        df[f"权重_{name}"] = df[f"权重_{name}"].shift(1).fillna(0.0)
+        df[weight_col(name)] = df[weight_col(name)].shift(1).fillna(0.0)
 
     # 风控原因也随持仓前移1天，使其与风控实际生效当日的持仓对齐，
     # 避免“当天显示触发止损但当天持仓仍是旧仓位”的误解。
@@ -460,7 +445,7 @@ def run(
     # 但 plot_nav_curves 等后续流程需要这些列。dropna 时只检查权重/收益列，
     # 不检查原始价格列，避免误删策略前期的有效交易日。
     check_cols = (
-        [f"权重_{n}" for n in name_list]
+        [weight_col(n) for n in name_list]
         + [f"日收益率_再平衡_{n}" for n in name_list]
         + [f"日收益率_持有_{n}" for n in name_list]
     )
@@ -470,28 +455,28 @@ def run(
     #    区分新调入（按开盘价成交）和继续持有（按前日收盘价持有）
     df["轮动策略日收益率"] = 0.0
     for name in name_list:
-        weight_col = f"权重_{name}"
-        prev_weight = df[weight_col].shift(1).fillna(0)
+        wcol = weight_col(name)
+        prev_weight = df[wcol].shift(1).fillna(0)
 
         # 新调入：今日权重 > 0 且 昨日权重 == 0
-        is_entry = (df[weight_col] > 0) & (prev_weight == 0)
+        is_entry = (df[wcol] > 0) & (prev_weight == 0)
         # 继续持有：今日权重 > 0 且 昨日权重 > 0
-        is_hold = (df[weight_col] > 0) & (prev_weight > 0)
+        is_hold = (df[wcol] > 0) & (prev_weight > 0)
 
         df.loc[is_entry, "轮动策略日收益率"] += (
-            df.loc[is_entry, f"日收益率_再平衡_{name}"] * df.loc[is_entry, weight_col]
+            df.loc[is_entry, f"日收益率_再平衡_{name}"] * df.loc[is_entry, wcol]
         )
         df.loc[is_hold, "轮动策略日收益率"] += (
-            df.loc[is_hold, f"日收益率_持有_{name}"] * df.loc[is_hold, weight_col]
+            df.loc[is_hold, f"日收益率_持有_{name}"] * df.loc[is_hold, wcol]
         )
 
         # 记录每只 ETF 每日的加权收益贡献，用于后续归因统计
         df[f"贡献_日收益_{name}"] = 0.0
         df.loc[is_entry, f"贡献_日收益_{name}"] = (
-            df.loc[is_entry, f"日收益率_再平衡_{name}"] * df.loc[is_entry, weight_col]
+            df.loc[is_entry, f"日收益率_再平衡_{name}"] * df.loc[is_entry, wcol]
         )
         df.loc[is_hold, f"贡献_日收益_{name}"] = (
-            df.loc[is_hold, f"日收益率_持有_{name}"] * df.loc[is_hold, weight_col]
+            df.loc[is_hold, f"日收益率_持有_{name}"] * df.loc[is_hold, wcol]
         )
 
     if df.empty:
@@ -508,7 +493,7 @@ def run(
     # 换手率 = sum(|今日权重 - 昨日权重|) / 2，双边成本 = 换手率 * 2 * 单边成本。
     transaction_cost = params.get("transaction_cost", 0.0)
     if transaction_cost > 0:
-        weight_cols = [f"权重_{n}" for n in name_list]
+        weight_cols = [weight_col(n) for n in name_list]
         turnover = np.zeros(len(df))
         for i in range(1, len(df)):
             turnover[i] = np.sum(np.abs(df.iloc[i][weight_cols].values - df.iloc[i - 1][weight_cols].values)) / 2.0
@@ -519,15 +504,15 @@ def run(
     df["轮动策略净值"] = (1.0 + df["轮动策略日收益率"]).cumprod()
 
     # 记录每日主持仓信号（权重最大的那个）
-    weight_cols = [f"权重_{n}" for n in name_list]
-    df["信号"] = df[weight_cols].idxmax(axis=1).str.replace("权重_", "")
+    weight_cols = [weight_col(n) for n in name_list]
+    df["信号"] = df[weight_cols].idxmax(axis=1).str.replace(WEIGHT_PREFIX, "")
 
     # 记录每日动量排名第一的 ETF（基于信号日得分）
     df["当天动量第一"] = df[signal_cols].idxmax(axis=1).str.replace(prefix, "")
 
     # 记录每日完整持仓组合，并标记换仓日
     def _format_holding(row: pd.Series) -> str:
-        holdings = [(n, row[f"权重_{n}"]) for n in name_list if row[f"权重_{n}"] > 0]
+        holdings = [(n, row[weight_col(n)]) for n in name_list if row[weight_col(n)] > 0]
         holdings.sort(key=lambda x: x[1], reverse=True)
         if not holdings:
             return "空仓"

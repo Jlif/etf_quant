@@ -10,6 +10,7 @@ import pandas as pd
 import requests
 
 from .base import BaseDataSource
+from ._common import filter_date_range, is_sz_stock, rename_ohlc
 
 # ---------------------------------------------------------------------------
 # mini_racer (V8) 并发安全：akshare 的新浪接口 fund_etf_hist_sina 内部使用
@@ -37,11 +38,7 @@ class AkshareDataSource(BaseDataSource):
     @staticmethod
     def _to_exchange_symbol(code: str) -> str:
         """根据 ETF 代码判断交易所并加前缀（sh510300 / sz159915）。"""
-        first = code[0] if code else ""
-        # 0/1/2/3 开头归为深交所，其余（5/6/9 等）归上交所
-        if first in ("0", "1", "2", "3"):
-            return f"sz{code}"
-        return f"sh{code}"
+        return f"sz{code}" if is_sz_stock(code) else f"sh{code}"
 
     def _fetch_em(self, code: str, start: str, end: str | None) -> pd.DataFrame:
         """东方财富数据源（前复权）。"""
@@ -57,14 +54,11 @@ class AkshareDataSource(BaseDataSource):
         df["日期"] = pd.to_datetime(df["日期"])
         df = df.set_index("日期").sort_index()
         self.adjusted = True
-        return df[["开盘", "最高", "最低", "收盘"]].rename(
-            columns={
-                "开盘": f"{code}_open",
-                "最高": f"{code}_high",
-                "最低": f"{code}_low",
-                "收盘": f"{code}_close",
-            }
-                )
+        return rename_ohlc(
+            df,
+            code,
+            {"open": "开盘", "high": "最高", "low": "最低", "close": "收盘"},
+        )
 
     def _fetch_tencent(self, code: str, start: str, end: str | None) -> pd.DataFrame:
         """腾讯数据源（东方财富失败时 fallback，按年份分段获取前复权数据）。"""
@@ -104,31 +98,16 @@ class AkshareDataSource(BaseDataSource):
         df = pd.DataFrame(all_rows, columns=["date", "open", "close", "high", "low", "volume"])
         df["date"] = pd.to_datetime(df["date"])
         df = df.drop_duplicates("date").sort_values("date").set_index("date")
-        df = df[["open", "high", "low", "close"]].astype(float).rename(
-            columns={
-                "open": f"{code}_open",
-                "high": f"{code}_high",
-                "low": f"{code}_low",
-                "close": f"{code}_close",
-            }
-        )
+        df = df[["open", "high", "low", "close"]].astype(float)
 
-        # 按请求范围过滤
-        df = df[df.index >= start_dt]
-        if end:
-            df = df[df.index <= end_dt]
-
-        if df.empty:
-            raise RuntimeError(f"腾讯接口在 {start} ~ {end or '今'} 范围内无数据")
-
-        if df.index[0] > start_dt:
-            print(
-                f"  [腾讯] {code} 数据仅回溯至 {df.index[0].date()}，"
-                f"无法覆盖 {start_dt.date()}"
-            )
+        df = filter_date_range(df, start_dt=start_dt, end_dt=end_dt, name=f"腾讯 {code}")
 
         self.adjusted = True
-        return df
+        return rename_ohlc(
+            df,
+            code,
+            {"open": "open", "high": "high", "low": "low", "close": "close"},
+        )
 
     def _fetch_sina(self, code: str, start: str, end: str | None) -> pd.DataFrame:
         """新浪财经数据源（未复权），作为腾讯失败/滞后的 fallback。"""
@@ -141,33 +120,19 @@ class AkshareDataSource(BaseDataSource):
             df = ak.fund_etf_hist_sina(symbol=symbol)
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date").sort_index()
-        df = df[["open", "high", "low", "close"]].astype(float).rename(
-            columns={
-                "open": f"{code}_open",
-                "high": f"{code}_high",
-                "low": f"{code}_low",
-                "close": f"{code}_close",
-            }
-        )
+        df = df[["open", "high", "low", "close"]].astype(float)
 
         start_dt = pd.to_datetime(start)
-        df = df[df.index >= start_dt]
-        if end:
-            end_dt = pd.to_datetime(end)
-            df = df[df.index <= end_dt]
-
-        if df.empty:
-            raise RuntimeError(f"新浪接口在 {start} ~ {end or '今'} 范围内无数据")
-
-        if df.index[0] > start_dt:
-            print(
-                f"  [新浪] {code} 数据仅回溯至 {df.index[0].date()}，"
-                f"无法覆盖 {start_dt.date()}"
-            )
+        end_dt = pd.to_datetime(end) if end else None
+        df = filter_date_range(df, start_dt=start_dt, end_dt=end_dt, name=f"新浪 {code}")
 
         # 新浪返回未复权价格
         self.adjusted = False
-        return df
+        return rename_ohlc(
+            df,
+            code,
+            {"open": "open", "high": "high", "low": "low", "close": "close"},
+        )
 
     def fetch(self, code: str, start: str, end: str | None = None, expect_today: bool = False) -> pd.DataFrame:
         # 主数据源：东方财富（前复权），成功直接返回，不做滞后判定

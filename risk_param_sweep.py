@@ -881,6 +881,8 @@ def main():
         f"\n"
     )
 
+    provider = app_config.data_source.provider
+
     data_source = get_data_source(
         name=provider,
         fallback=False,

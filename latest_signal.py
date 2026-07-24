@@ -127,6 +127,8 @@ def main():
     print(f"策略数: {len(enabled_strategies)}")
     print("="*60)
 
+    provider = app_config.data_source.provider
+
     # 初始化数据源（只用于识别 provider，不触发网络请求）
     data_source = get_data_source(
         name=provider,

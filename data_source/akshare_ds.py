@@ -84,8 +84,10 @@ class AkshareDataSource(BaseDataSource):
                 raise RuntimeError(f"腾讯接口返回错误: {payload.get('msg')}")
 
             symbol_data = payload["data"].get(symbol, {})
-            # 该年份可能尚未上市，返回空数据，跳过即可
-            raw = symbol_data.get("qfqday", [])
+            # 该年份可能尚未上市，返回空数据，跳过即可。
+            # 新上市 ETF（尚无分红除权）腾讯不返回 qfqday，只有 day，
+            # 此时未复权与前复权等价，回退使用 day。
+            raw = symbol_data.get("qfqday") or symbol_data.get("day", [])
             if not raw:
                 continue
 

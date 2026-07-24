@@ -60,6 +60,8 @@ def main():
     # 清空 output 目录
     clear_output_dir(OUTPUT_DIR)
 
+    provider = app_config.data_source.provider
+
     # 初始化数据源（只用于识别 provider，不触发网络请求）
     data_source = get_data_source(
         name=provider,

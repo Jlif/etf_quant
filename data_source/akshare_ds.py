@@ -1,9 +1,10 @@
-"""akshare 数据源（东方财富 → 腾讯 fallback）"""
+"""akshare 数据源（东方财富 → 腾讯 → 新浪 fallback）"""
 
 from __future__ import annotations
 
+import json
+import re
 import time
-import threading
 from datetime import timedelta
 
 import pandas as pd
@@ -11,18 +12,6 @@ import requests
 
 from .base import BaseDataSource
 from ._common import filter_date_range, is_sz_stock, rename_ohlc
-
-# ---------------------------------------------------------------------------
-# mini_racer (V8) 并发安全：akshare 的新浪接口 fund_etf_hist_sina 内部使用
-# py_mini_racer 执行 JS 解密。V8 的 AddressPoolManager 在多线程同时初始化
-# isolate 时存在竞态，会触发致命崩溃：
-#     [FATAL:address_pool_manager.cc(67)] Check failed: !pool->IsInitialized().
-# 由于 orchestrator 会用 ThreadPoolExecutor 并发下载多个 ETF，必须用一个
-# 进程级锁串行化 mini_racer 的使用（已验证可消除该崩溃）。
-# 注意：东方财富 fund_etf_hist_em 与腾讯接口均为纯 HTTP，不涉及 mini_racer，
-# 仍可并发，不受此锁影响。
-# ---------------------------------------------------------------------------
-_MINI_RACER_LOCK = threading.Lock()
 
 # _is_stale 容忍天数（未传 --today 时生效）：覆盖周末、节假日（春节/国庆最长约
 # 9 天休市）以及当日数据尚未生成的情况——默认只要求最近一个交易日的数据，
@@ -112,20 +101,38 @@ class AkshareDataSource(BaseDataSource):
         )
 
     def _fetch_sina(self, code: str, start: str, end: str | None) -> pd.DataFrame:
-        """新浪财经数据源（未复权），作为腾讯失败/滞后的 fallback。"""
-        import akshare as ak
+        """新浪财经数据源（未复权），作为腾讯失败/滞后的 fallback。
 
+        直接调用新浪 K 线 JSONP 接口（纯 HTTP，不依赖 py_mini_racer；
+        akshare 的 fund_etf_hist_sina 需要 mini_racer 执行 JS 解密，
+        其 0.6.0 macOS arm64 wheel 与 Python 代码不匹配，不可用）。
+        接口按条数回溯（datalen 上限约 1900 条），根据起始日估算所需条数。
+        """
         symbol = self._to_exchange_symbol(code)
-        # fund_etf_hist_sina 内部用 py_mini_racer 执行 JS 解密，并发会触发 V8
-        # AddressPoolManager 崩溃，故用进程级锁串行化该调用。
-        with _MINI_RACER_LOCK:
-            df = ak.fund_etf_hist_sina(symbol=symbol)
-        df["date"] = pd.to_datetime(df["date"])
+        start_dt = pd.to_datetime(start)
+        end_dt = pd.to_datetime(end) if end else pd.Timestamp.now()
+
+        # 自然日 × 0.7 估算交易日数，加 10% 余量；datalen 过大接口会返回 null
+        est_days = int((end_dt - start_dt).days * 0.7 * 1.1) + 10
+        datalen = min(max(est_days, 100), 1900)
+
+        url = (
+            "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_data=/"
+            "CN_MarketDataService.getKLineData"
+            f"?symbol={symbol}&scale=240&ma=no&datalen={datalen}"
+        )
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        m = re.search(r"=\((.*)\)", r.text, re.S)
+        payload = json.loads(m.group(1)) if m else None
+        if not payload:
+            raise RuntimeError(f"新浪接口返回为空: {r.text[:80]}")
+
+        df = pd.DataFrame(payload)
+        df["date"] = pd.to_datetime(df["day"])
         df = df.set_index("date").sort_index()
         df = df[["open", "high", "low", "close"]].astype(float)
 
-        start_dt = pd.to_datetime(start)
-        end_dt = pd.to_datetime(end) if end else None
         df = filter_date_range(df, start_dt=start_dt, end_dt=end_dt, name=f"新浪 {code}")
 
         # 新浪返回未复权价格
@@ -186,5 +193,12 @@ class AkshareDataSource(BaseDataSource):
             return True
         latest = df.index[-1].date()
         expected = pd.to_datetime(end).date() if end else pd.Timestamp.now().date()
-        tolerance = timedelta(days=0) if expect_today else timedelta(days=STALE_TOLERANCE_DAYS)
+        if expect_today:
+            # --today 要求最新交易日数据：周末/节假日当天无交易，
+            # 将期望日期回退到最近的工作日，避免周六日运行时永远"滞后"。
+            while expected.weekday() >= 5:  # 5=周六, 6=周日
+                expected -= timedelta(days=1)
+            tolerance = timedelta(days=0)
+        else:
+            tolerance = timedelta(days=STALE_TOLERANCE_DAYS)
         return latest < expected - tolerance

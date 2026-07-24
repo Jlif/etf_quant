@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from data_source import get_data_source
 from utils import load_config
+from utils.text import display_width, ljust
 
 
 def _merge_price_data(old_df: pd.DataFrame | None, new_df: pd.DataFrame) -> pd.DataFrame:
@@ -41,6 +42,12 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
         print("[提示] 没有启用的策略或候选池为空")
         return
 
+    # 构造 code -> name 映射（同一 code 在不同策略中可能出现，取第一个名称）
+    names = {}
+    for s in enabled_strategies:
+        for p in s.pool:
+            names.setdefault(p.code, p.name)
+
     cache_dir = app_config.backtest.cache_dir
     os.makedirs(cache_dir, exist_ok=True)
     target_start = app_config.backtest.start_date
@@ -52,15 +59,17 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
     print(f"标的数量: {len(codes)}")
     print("=" * 60)
 
+    fetched = []  # (name, start_date, end_date)
     for i, code in enumerate(codes):
+        name = names.get(code, code)
         cache_file = os.path.join(cache_dir, f"{code}_{data_source.name}.csv")
         meta_file = cache_file + ".meta.json"
         action = "刷新" if include_today and os.path.exists(cache_file) else "下载"
-        print(f"[{i + 1}/{len(codes)}] {action} {code} ...", flush=True)
+        print(f"[{i + 1}/{len(codes)}] {action} {code} ({name}) ...", flush=True)
 
         df_new = data_source.fetch(code, target_start, expect_today=include_today)
         if df_new is None or df_new.empty:
-            print(f"  [警告] {code} 未返回数据")
+            print(f"  [警告] {code} ({name}) 未返回数据")
             continue
 
         if os.path.exists(cache_file):
@@ -73,12 +82,21 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
         with open(meta_file, "w", encoding="utf-8") as f:
             json.dump({"adjusted": data_source.adjusted}, f)
 
-        print(f"  [完成] {code} -> {cache_file} ({len(df_result)} 行)")
+        start_dt = df_result.index[0]
+        end_dt = df_result.index[-1]
+        fetched.append((name, start_dt.date(), end_dt.date()))
+        print(f"  [完成] {code} ({name})  -> {cache_file} ({len(df_result)} 行)")
 
         if i < len(codes) - 1:
             time.sleep(1)
 
-    print("[完成] 数据拉取结束")
+    if fetched:
+        print("\n[数据] 各 ETF 数据起止日期:")
+        max_name_width = max(display_width(name) for name, _, _ in fetched)
+        for name, start, end in fetched:
+            print(f"      {ljust(name, max_name_width)} : {start} ~ {end}")
+
+    print("\n[完成] 数据拉取结束")
 
 
 def main():

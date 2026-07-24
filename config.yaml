@@ -98,7 +98,7 @@ strategies:
       scoring: momentum
       adaptive_scoring: false
       benchmark: "沪深300ETF"
-      top_n: 3
+      top_n: 2
       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
       dynamic_pool: true 
       # 风控导致仓位释放后，是否按当日动量得分顺位补选新标的；false 则直接全部买入 safe_haven
@@ -107,7 +107,7 @@ strategies:
       risk_control:
         layer1:
           enabled: true
-          ma_lookback: 16
+          ma_lookback: 13
           drawdown_lookback: 41
           drawdown_threshold: 0.08
         layer2:
@@ -116,9 +116,9 @@ strategies:
           atr_lookback: 10
         layer3:
           enabled: true
-          vol_lookback: 110
-          target_vol: 0.15
+          vol_lookback: 66
+          target_vol: 0.17
           comfort_zone: 0.25
-          caution_zone: 0.4
+          caution_zone: 0.45
           # 平滑过渡参数：越大则波动率越接近 caution_zone 时仓位下降越快，建议 2.0~4.0
           transition_power: 4

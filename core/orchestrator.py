@@ -631,9 +631,10 @@ def print_latest_signal(
             else:
                 vol_map[name] = np.nan
 
+        name_w = max(display_width(n) for n in list(name_list) + ["ETF名称"])
         header = (
             f"{ljust('排名', 4)} "
-            f"{ljust('ETF名称', 20)} "
+            f"{ljust('ETF名称', name_w)} "
             f"{ljust('代码', 10)} "
             f"{ljust('最新行情日', 12)} "
             f"{ljust('周期动量得分', 12)} "
@@ -692,7 +693,7 @@ def print_latest_signal(
             rank_str = f"{marker}{i}"
             row = (
                 f"{ljust(rank_str, 4)} "
-                f"{ljust(name, 20)} "
+                f"{ljust(name, name_w)} "
                 f"{ljust(code, 10)} "
                 f"{ljust(last_date, 12)} "
                 f"{ljust(score_str, 12)} "

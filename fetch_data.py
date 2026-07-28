@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -32,6 +33,16 @@ def _merge_price_data(old_df: pd.DataFrame | None, new_df: pd.DataFrame) -> pd.D
     merged = pd.concat([old_df, new_df])
     merged = merged[~merged.index.duplicated(keep="last")]
     return merged.sort_index()
+
+
+def _cache_last_date(cache_file: str) -> str | None:
+    """读取缓存 CSV 最后一行的日期（YYYY-MM-DD），无缓存返回 None。"""
+    if not os.path.exists(cache_file):
+        return None
+    with open(cache_file, "rb") as f:
+        f.seek(-min(256, os.fstat(f.fileno()).st_size), os.SEEK_END)
+        tail = f.read().decode("utf-8", errors="ignore").strip().splitlines()
+    return tail[-1].split(",", 1)[0] if tail else None
 
 
 def fetch_all_data(app_config, data_source, include_today: bool = False) -> None:
@@ -59,11 +70,21 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
     print(f"标的数量: {len(codes)}")
     print("=" * 60)
 
+    today_str = datetime.date.today().isoformat()
+
     fetched = []  # (name, start_date, end_date)
     for i, code in enumerate(codes):
         name = names.get(code, code)
         cache_file = os.path.join(cache_dir, f"{code}_{data_source.name}.csv")
         meta_file = cache_file + ".meta.json"
+
+        # 缓存最新日期已是当天，无需更新
+        last_date = _cache_last_date(cache_file)
+        if last_date == today_str:
+            print(f"[{i + 1}/{len(codes)}] 跳过 {code} ({name}) 缓存已是最新 ({last_date})")
+            fetched.append((name, None, last_date))
+            continue
+
         action = "刷新" if include_today and os.path.exists(cache_file) else "下载"
         print(f"[{i + 1}/{len(codes)}] {action} {code} ({name}) ...", flush=True)
 
@@ -94,7 +115,7 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
         print("\n[数据] 各 ETF 数据起止日期:")
         max_name_width = max(display_width(name) for name, _, _ in fetched)
         for name, start, end in fetched:
-            print(f"      {ljust(name, max_name_width)} : {start} ~ {end}")
+            print(f"      {ljust(name, max_name_width)} : {start or '...'} ~ {end}")
 
     print("\n[完成] 数据拉取结束")
 

@@ -585,12 +585,12 @@ def run_strategy(
 def _calc_position(
     capital: float, weight_frac: float, price: float, lot_size: int = 100
 ) -> tuple[float, int]:
-    """按资金与权重计算买入金额和股数（向下取整到 lot_size 的整数倍）。"""
+    """按资金与权重计算买入股数（向下取整到 lot_size 的整数倍）及实际花费金额。"""
     amount = capital * weight_frac
     if price <= 0 or not np.isfinite(price):
         return amount, 0
-    shares = int((amount / price) // lot_size) * lot_size
-    return amount, max(0, shares)
+    shares = max(0, int((amount / price) // lot_size) * lot_size)
+    return shares * price, shares
 
 
 def print_latest_signal(
@@ -717,7 +717,7 @@ def print_latest_signal(
                 price = float(result[name].iloc[-1])
                 amount, shares = _calc_position(capital, float(weight), price, lot_size)
                 line += (
-                    f" | 买入金额 ≈ {amount:,.0f} 元"
+                    f" | 买入金额 {amount:,.0f} 元"
                     f" | 最新价 {price:.3f}"
                     f" | 买入 {shares} 股"
                 )
@@ -757,7 +757,7 @@ def print_latest_signal(
                 amount, shares = _calc_position(capital, weight_frac, price, lot_size)
                 print(
                     f"  买入 {name} ({code}): {weight_frac*100:.0f}% | "
-                    f"金额 ≈ {amount:,.0f} 元 | 最新价 {price:.3f} | 买入 {shares} 股"
+                    f"金额 {amount:,.0f} 元 | 最新价 {price:.3f} | 买入 {shares} 股"
                 )
 
     print(f"{'='*60}")

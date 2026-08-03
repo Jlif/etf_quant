@@ -85,10 +85,14 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
             fetched.append((name, None, last_date))
             continue
 
-        action = "刷新" if include_today and os.path.exists(cache_file) else "下载"
-        print(f"[{i + 1}/{len(codes)}] {action} {code} ({name}) ...", flush=True)
+        # 有缓存时从缓存最后一天增量拉取（含当天，新数据覆盖重叠日期）；
+        # 需要全量重拉时，手动删除对应缓存文件即可。
+        has_cache = os.path.exists(cache_file)
+        fetch_start = last_date.replace("-", "") if has_cache else target_start
+        action = "增量" if has_cache else "下载"
+        print(f"[{i + 1}/{len(codes)}] {action} {code} ({name}) 从 {fetch_start} ...", flush=True)
 
-        df_new = data_source.fetch(code, target_start, expect_today=include_today)
+        df_new = data_source.fetch(code, fetch_start, expect_today=include_today)
         if df_new is None or df_new.empty:
             print(f"  [警告] {code} ({name}) 未返回数据")
             continue

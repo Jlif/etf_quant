@@ -27,10 +27,15 @@ class TickFlowDataSource(BaseDataSource):
         return f"{code}.SZ" if is_sz_stock(code) else f"{code}.SH"
 
     def fetch(self, code: str, start: str, end: str | None = None, expect_today: bool = False) -> pd.DataFrame:
-        start_ms = int(pd.to_datetime(start).timestamp() * 1000)
+        # tickflow 的 start_time 为排他边界（K线时间戳为交易日 00:00，
+        # start_time 需严格小于首根K线），故往前挪一天，多拉的由 filter_date_range 裁掉
+        start_dt = pd.to_datetime(start)
+        start_ms = int((start_dt - pd.Timedelta(days=1)).timestamp() * 1000)
         kwargs: dict = {"period": "1d", "start_time": start_ms, "count": MAX_COUNT, "as_dataframe": True}
-        if end:
-            kwargs["end_time"] = int(pd.to_datetime(end).timestamp() * 1000)
+        end_dt = pd.to_datetime(end) if end else None
+        if end_dt is not None:
+            # end_time 同理按排他边界处理，+1 天保证包含 end 当天
+            kwargs["end_time"] = int((end_dt + pd.Timedelta(days=1)).timestamp() * 1000)
 
         # 默认 forward（比例前复权），与 akshare qfq 语义一致
         df = self._tf.klines.get(self._to_symbol(code), **kwargs)
@@ -41,7 +46,7 @@ class TickFlowDataSource(BaseDataSource):
         df["date"] = pd.to_datetime(df["trade_date"])
         df = df.drop_duplicates("date").set_index("date").sort_index()
 
-        df = filter_date_range(df, start_dt=pd.to_datetime(start), name=f"tickflow {code}")
+        df = filter_date_range(df, start_dt=start_dt, end_dt=end_dt, name=f"tickflow {code}")
 
         self.adjusted = True
         return rename_ohlc(

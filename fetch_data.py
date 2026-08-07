@@ -112,7 +112,8 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
         fetched.append((name, start_dt.date(), end_dt.date()))
         print(f"  [完成] {code} ({name})  -> {cache_file} ({len(df_result)} 行)")
 
-        if i < len(codes) - 1:
+        # tickflow 无需限速；akshare 东财接口标的之间限速 1s
+        if data_source.name != "tickflow" and i < len(codes) - 1:
             time.sleep(1)
 
     if fetched:

@@ -2,10 +2,12 @@
 
 from .base import BaseDataSource
 from .akshare_ds import AkshareDataSource
+from .tickflow_ds import TickFlowDataSource
 from .yfinance_ds import YFinanceDataSource
 
 BUILTIN_SOURCES: dict[str, type[BaseDataSource]] = {
     "akshare": AkshareDataSource,
+    "tickflow": TickFlowDataSource,
     "yfinance": YFinanceDataSource,
 }
 
@@ -29,7 +31,7 @@ def get_data_source(
     """
     if name is None:
         # 默认探测顺序：akshare -> yfinance
-        candidates = ["akshare", "yfinance"]
+        candidates = ["tickflow", "akshare", "yfinance"]
     else:
         candidates = [name]
 

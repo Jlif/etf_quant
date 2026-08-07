@@ -44,7 +44,7 @@ config.yaml → utils/config.py (AppConfig)
 
 - **`data_source/`**：数据源抽象层
   - `BaseDataSource` 定义 `fetch(code, start, end)` 接口，返回以日期为索引、code 为列名的收盘价 DataFrame
-  - `get_data_source()` 支持按名称初始化数据源；`fetch_data.py` 默认使用 `akshare` 东财接口且不 fallback，回测/信号入口通过 `skip_test=True` 避免连通性测试
+  - `get_data_source()` 支持按名称初始化数据源；`fetch_data.py` 默认使用 `tickflow` 免费服务（无需 API key，仅历史日K）且不 fallback，回测/信号入口通过 `skip_test=True` 避免连通性测试
   - `YFinanceDataSource` 对深市 ETF（如 159915）自动加 `.SZ` 后缀，其余加 `.SS`
 
 - **`strategy/`**：策略实现
@@ -63,7 +63,7 @@ config.yaml → utils/config.py (AppConfig)
 
 ### 关键设计
 
-- **数据获取与使用解耦**：`fetch_data.py` 是唯一会发起网络请求的入口，默认使用 akshare 东财接口，标的之间 `time.sleep(1)` 限速；`main.py`、`latest_signal.py`、`risk_param_sweep.py` 默认只读本地缓存，不触发任何下载。
+- **数据获取与使用解耦**：`fetch_data.py` 是唯一会发起网络请求的入口，默认使用 tickflow，标的之间 `time.sleep(1)` 限速；`main.py`、`latest_signal.py`、`risk_param_sweep.py` 默认只读本地缓存，不触发任何下载。
 - **数据缓存**：下载的 ETF 数据按 `data_cache/{code}_{provider}.csv` 缓存，并伴随 `.meta.json` 记录是否已复权；不会自动过期，如需更新请重新运行 `fetch_data.py`。
 - **复权跳空修正**：`main.py` 中的 `detect_and_fix_price_jumps()` 会检测日收益率绝对值超过 30% 的异常点（yfinance 对国内 ETF 复权偶尔出错），通过整体缩放前期价格修复。
 - **策略实际起始日**：取 `max(配置起始日, 所有 ETF 中最晚的数据起始日)`，并在日志中提示。
@@ -73,7 +73,7 @@ config.yaml → utils/config.py (AppConfig)
 
 ```yaml
 data_source:
-  provider: akshare       # akshare | yfinance
+  provider: tickflow       # tickflow | akshare | yfinance
 
 backtest:
   start_date: "20160701"
@@ -103,7 +103,7 @@ strategies:
 
 ## 开发注意事项
 
-- 数据源依赖 akshare/yfinance，国内网络建议优先使用 akshare
+- 数据源依赖 tickflow/akshare/yfinance；默认 tickflow（`TickFlow.free()`，前复权日K，盘中不更新），国内网络也可用 akshare
 - matplotlib 在无图形界面环境自动使用 Agg 后端，中文字体回退顺序：SimHei → Arial Unicode MS → DejaVu Sans
 - 新增数据源需继承 `BaseDataSource` 并在 `data_source/__init__.py` 的 `BUILTIN_SOURCES` 中注册
 - 新增策略模式需在 `strategy/` 下实现，并在 `main.py` 的 `run_strategy()` 中添加分支

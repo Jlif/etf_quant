@@ -134,8 +134,8 @@ def main():
     )
     parser.add_argument(
         "--provider",
-        default="akshare",
-        help="数据源，默认 akshare",
+        default="tickflow",
+        help="数据源，默认 tickflow",
     )
     args = parser.parse_args()
 

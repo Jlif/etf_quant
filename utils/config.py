@@ -10,7 +10,7 @@ import yaml
 
 @dataclass
 class DataSourceConfig:
-    provider: Literal["akshare", "yfinance"] = "akshare"
+    provider: Literal["akshare", "tickflow", "yfinance"] = "tickflow"
 
 
 @dataclass
@@ -132,7 +132,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
     return AppConfig(
         data_source=DataSourceConfig(
-            provider=ds.get("provider", "akshare"),
+            provider=ds.get("provider", "tickflow"),
         ),
         backtest=BacktestConfig(
             start_date=bt.get("start_date", "20130729"),

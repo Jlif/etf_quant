@@ -631,6 +631,25 @@ def print_latest_signal(
             else:
                 vol_map[name] = np.nan
 
+        # L1 风控指标：回撤（现价 vs drawdown_lookback 日高点）与均线对比
+        layer1 = strategy.params.get("risk_control", {}).get("layer1", {})
+        l1_enabled = layer1.get("enabled", False)
+        ma_lookback = layer1.get("ma_lookback", 20)
+        dd_lookback = layer1.get("drawdown_lookback", 252)
+        dd_map, ma_map = {}, {}
+        if l1_enabled:
+            for name in name_list:
+                if name not in result.columns:
+                    continue
+                prices = result[name].dropna()
+                if prices.empty:
+                    continue
+                cur = prices.iloc[-1]
+                dd_map[name] = cur / prices.tail(dd_lookback).max() - 1
+                if len(prices) >= ma_lookback:
+                    ma = prices.tail(ma_lookback).mean()
+                    ma_map[name] = (cur, ma, cur / ma - 1)
+
         name_w = max(display_width(n) for n in list(name_list) + ["ETF名称"])
         header = (
             f"{ljust('排名', 4)} "
@@ -639,12 +658,19 @@ def print_latest_signal(
             f"{ljust('最新行情日', 12)} "
             f"{ljust('周期动量得分', 12)} "
             f"{ljust('波动率', 10)} "
+        )
+        if l1_enabled:
+            header += (
+                f"{ljust(f'回撤{dd_lookback}日', 12)} "
+                f"{ljust(f'现价/MA{ma_lookback}', 23)} "
+            )
+        header += (
             f"{ljust('目前持仓仓位', 12)} "
             f"{ljust('建议下日仓位', 12)} "
             f"{ljust('未入选原因', 12)}"
         )
         print(header)
-        print("-" * 112)
+        print("-" * (112 + (37 if l1_enabled else 0)))
 
         scores = []
         for name in name_list:
@@ -675,11 +701,13 @@ def print_latest_signal(
                 reason = per_etf_reason
             else:
                 reason = f"未进top{top_n}"
-            scores.append((name, code, last_date, score, vol, current_weight, signal_weight, reason))
+            dd = dd_map.get(name, np.nan)
+            ma_info = ma_map.get(name)
+            scores.append((name, code, last_date, score, vol, dd, ma_info, current_weight, signal_weight, reason))
 
         scores.sort(key=lambda x: x[3] if not pd.isna(x[3]) else -np.inf, reverse=True)
 
-        for i, (name, code, last_date, score, vol, current_weight, signal_weight, reason) in enumerate(scores, 1):
+        for i, (name, code, last_date, score, vol, dd, ma_info, current_weight, signal_weight, reason) in enumerate(scores, 1):
             marker = "★" if signal_weight > 0 else " "
             current_weight_pct = f"{current_weight*100:.0f}%" if current_weight > 0 else "0%"
             signal_weight_pct = f"{signal_weight*100:.0f}%" if signal_weight > 0 else "0%"
@@ -698,6 +726,18 @@ def print_latest_signal(
                 f"{ljust(last_date, 12)} "
                 f"{ljust(score_str, 12)} "
                 f"{ljust(vol_str, 10)} "
+            )
+            if l1_enabled:
+                dd_str = f"{dd:.1%}" if not pd.isna(dd) else "-"
+                if ma_info:
+                    ma_str = f"{ma_info[0]:.3f}/{ma_info[1]:.3f} {ma_info[2]:+.1%}"
+                else:
+                    ma_str = "-"
+                row += (
+                    f"{ljust(dd_str, 12)} "
+                    f"{ljust(ma_str, 23)} "
+                )
+            row += (
                 f"{ljust(current_weight_pct, 12)} "
                 f"{ljust(signal_weight_pct, 12)} "
                 f"{ljust(reason, 12)}"

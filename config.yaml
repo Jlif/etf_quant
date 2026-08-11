@@ -108,15 +108,15 @@ strategies:
         layer1:
           enabled: true
           ma_lookback: 17
-          drawdown_lookback: 70
-          drawdown_threshold: 0.10
+          drawdown_lookback: 55
+          drawdown_threshold: 0.14
         layer2:
           enabled: true
           atr_multiplier: 2
           atr_lookback: 10
         layer3:
           enabled: true
-          vol_lookback: 50
+          vol_lookback: 60
           target_vol: 0.33
           comfort_zone: 0.25
           caution_zone: 0.35

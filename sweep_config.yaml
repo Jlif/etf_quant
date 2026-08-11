@@ -18,17 +18,17 @@ output: "output/risk_sweep_seq.csv"
 sort_by: "cagr"
 # sharpe_threshold: 0.7  # sequential 模式下判定较优取值的最小夏普
 
-# 参数扫描范围（第12轮：新基线下复核 lookback）
+# 参数扫描范围（新逻辑第3轮：最终 L1 基线下复核 L3）
 params:
-  lookbacks: [15, 18, 20, 22, 25]
+  lookbacks: [20]
   l1_ma_lookbacks: [17]
-  l1_drawdown_lookbacks: [70]
-  l1_drawdown_thresholds: [0.10]
+  l1_drawdown_lookbacks: [55]
+  l1_drawdown_thresholds: [0.14]
   l2_atr_multipliers: [2.0]
   l2_atr_lookbacks: [10]
-  l3_target_vols: [0.33]
-  l3_vol_lookbacks: [50]
+  l3_target_vols: [0.25, 0.33, 0.40]
+  l3_vol_lookbacks: [55, 60, 66]
   l3_comfort_zones: [0.25]
-  l3_caution_zones: [0.35]
+  l3_caution_zones: [0.33, 0.35, 0.37]
   l3_caution_scales: [0.5]
   l3_transition_powers: [4.0]

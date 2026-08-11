@@ -249,6 +249,11 @@ def run(
     raw_weight_cols = [weight_col(n) for n in name_list]
     raw_weights_df = df[raw_weight_cols].copy()
 
+    # 当天触发风控（L1 均线/回撤、L3 熔断）的标的，全部禁止递补。
+    # L2 是持仓期 ATR 跟踪止损，对未持仓的递补候选无意义（新买入当天才建 HWM），
+    # 其当日被止损的持仓由下方 zeroed 掩码覆盖。
+    risk_blocked = pd.DataFrame(False, index=df.index, columns=name_list)
+
     # 3.05–3.7 三层风控系统
     risk_control = params.get("risk_control", {})
 
@@ -284,6 +289,14 @@ def run(
             dd_trig = l1_triggers["drawdown"].get(name)
             if ma_trig is None or dd_trig is None:
                 continue
+            trig = (ma_trig | dd_trig).fillna(False)
+            risk_blocked[name] |= trig
+            reason_col = f"风控原因_{name}"
+            # 未持仓但触发 L1 的标的也标记原因，供最新信号表展示（不写入聚合风控原因）
+            empty = df[reason_col] == ""
+            df.loc[trig & ma_trig.fillna(False) & ~dd_trig.fillna(False) & empty, reason_col] = "L1-标的均线"
+            df.loc[trig & ~ma_trig.fillna(False) & dd_trig.fillna(False) & empty, reason_col] = "L1-标的回撤"
+            df.loc[trig & ma_trig.fillna(False) & dd_trig.fillna(False) & empty, reason_col] = "L1-标的均线+回撤"
             etf_triggered = (pre_weights[weight_col(name)] > 0) & (df[weight_col(name)] == 0)
             if not etf_triggered.any():
                 continue
@@ -352,7 +365,7 @@ def run(
         weight_cols = [weight_col(n) for n in name_list]
         weights_df = df[weight_cols].copy()
         pre_weights = weights_df.copy()
-        adjusted_weights = layer3_vol_target_filter(
+        adjusted_weights, l3_scale = layer3_vol_target_filter(
             weights_df=weights_df,
             close_df=close_df,
             target_vol=target_vol,
@@ -365,6 +378,14 @@ def run(
         )
         for name in name_list:
             df[weight_col(name)] = adjusted_weights[weight_col(name)]
+
+        # 当天触发熔断（scale==0）的标的禁止递补，并标记原因供最新信号表展示
+        for name in l3_scale.columns:
+            panic_mask = (l3_scale[name] == 0).fillna(False)
+            risk_blocked[name] |= panic_mask
+            reason_col = f"风控原因_{name}"
+            mark = panic_mask & (df[reason_col] == "")
+            df.loc[mark, reason_col] = "L3-波动率熔断"
 
         # 标的级别：逐只判断是熔断（清零）还是压缩（降仓但未清零）
         for name in name_list:
@@ -395,14 +416,16 @@ def run(
                 df.loc[caution, f"风控原因_{name}"] = "L3-波动率压缩"
 
     # 3.8 风控后仓位递补：被清零/压缩释放的仓位优先补给后续正得分标的，
-    #     没有正得分标的时才归 safe_haven；也可配置为直接全部归 safe_haven。
-    #     被风控强制清零的标的不再重新纳入，只从排名后续顺位递补。
+    #     递补候选同样要过风控检查（当天触发 L1/L3 的不可递补），
+    #     所有正得分候选都不可用时才归 safe_haven；也可配置为直接全部归 safe_haven。
     safe_haven = params.get("safe_haven")
     fill_by_score = params.get("fill_shortfall_by_score", True)
     weight_cols = [weight_col(n) for n in name_list]
     weights_df = df[weight_cols].copy()
-    blocked_df = (raw_weights_df > 0) & (weights_df == 0)
-    blocked_df.columns = name_list
+    # 不可递补 = 当天触发 L1/L3 的所有标的 + 原始有仓但被风控清零的标的（含 L2 止损）
+    zeroed = (raw_weights_df > 0) & (weights_df == 0)
+    zeroed.columns = name_list
+    blocked_df = risk_blocked | zeroed
     filled_weights = _fill_risk_shortfall(
         weights_df,
         score_by_name,

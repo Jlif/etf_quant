@@ -617,14 +617,20 @@ def print_latest_signal(
         lookback = strategy.params.get("lookback", 20)
         top_n = strategy.params.get("top_n", 1)
 
-        # 计算每只 ETF 的 lookback 日年化波动率
+        # 波动率列：L3 启用时与其判定口径一致（EWMA 年化），否则用 lookback 日简单滚动
+        layer3_cfg = strategy.params.get("risk_control", {}).get("layer3", {})
+        l3_enabled = layer3_cfg.get("enabled", False)
+        vol_lookback_l3 = layer3_cfg.get("vol_lookback", 20)
         vol_map = {}
         for name in name_list:
             if name in result.columns:
                 prices = result[name].dropna()
                 returns = prices.pct_change(fill_method=None).dropna()
                 if len(returns) >= 2:
-                    vol = returns.tail(lookback).std() * np.sqrt(252)
+                    if l3_enabled:
+                        vol = returns.ewm(span=vol_lookback_l3).std().iloc[-1] * np.sqrt(252)
+                    else:
+                        vol = returns.tail(lookback).std() * np.sqrt(252)
                     vol_map[name] = vol
                 else:
                     vol_map[name] = np.nan
@@ -651,13 +657,14 @@ def print_latest_signal(
                     ma_map[name] = (cur, ma, cur / ma - 1)
 
         name_w = max(display_width(n) for n in list(name_list) + ["ETF名称"])
+        vol_header = f"波动率EWMA{vol_lookback_l3}" if l3_enabled else "波动率"
         header = (
             f"{ljust('排名', 4)} "
             f"{ljust('ETF名称', name_w)} "
             f"{ljust('代码', 10)} "
             f"{ljust('最新行情日', 12)} "
             f"{ljust('周期动量得分', 12)} "
-            f"{ljust('波动率', 10)} "
+            f"{ljust(vol_header, 13)} "
         )
         if l1_enabled:
             header += (
@@ -670,7 +677,7 @@ def print_latest_signal(
             f"{ljust('未入选原因', 12)}"
         )
         print(header)
-        print("-" * (112 + (37 if l1_enabled else 0)))
+        print("-" * (115 + (37 if l1_enabled else 0)))
 
         scores = []
         for name in name_list:
@@ -725,7 +732,7 @@ def print_latest_signal(
                 f"{ljust(code, 10)} "
                 f"{ljust(last_date, 12)} "
                 f"{ljust(score_str, 12)} "
-                f"{ljust(vol_str, 10)} "
+                f"{ljust(vol_str, 13)} "
             )
             if l1_enabled:
                 dd_str = f"{dd:.1%}" if not pd.isna(dd) else "-"

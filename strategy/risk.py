@@ -190,8 +190,10 @@ def layer3_vol_target_filter(
 
     Returns
     -------
-    pd.DataFrame
-        调整后的权重表（副本）。
+    tuple[pd.DataFrame, pd.DataFrame]
+        - 调整后的权重表（副本）
+        - 每只风险资产的每日 scale 表（列名为标的名称）；
+          scale == 0 表示当天触发熔断（panic），调用方可据此阻止其递补
     """
     if target_vol <= 0:
         raise ValueError("target_vol 必须大于 0")
@@ -204,6 +206,7 @@ def layer3_vol_target_filter(
 
     returns = close_df.pct_change(fill_method=None)
 
+    scale_by_name = {}
     for name in risk_name_list:
         asset_returns = returns[name]
         ewma_vol = asset_returns.ewm(span=vol_lookback).std() * np.sqrt(252)
@@ -230,5 +233,6 @@ def layer3_vol_target_filter(
         scale = scale.fillna(1.0)
 
         adjusted[weight_col(name)] *= scale
+        scale_by_name[name] = scale
 
-    return adjusted
+    return adjusted, pd.DataFrame(scale_by_name)

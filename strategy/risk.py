@@ -197,8 +197,8 @@ def layer3_vol_target_filter(
     """
     if target_vol <= 0:
         raise ValueError("target_vol 必须大于 0")
-    if not (0 < comfort_zone < caution_zone):
-        raise ValueError("必须满足 0 < comfort_zone < caution_zone")
+    if not (0 < comfort_zone <= caution_zone):
+        raise ValueError("必须满足 0 < comfort_zone <= caution_zone（等宽时警惕区为空，即纯熔断）")
 
     adjusted = weights_df.copy()
     _, name_list = parse_weight_cols(adjusted)
@@ -221,11 +221,14 @@ def layer3_vol_target_filter(
 
         if transition_power is not None:
             # 平滑幂函数过渡：x=0 时 factor=1，x=1 时 factor=0
-            x = ((ewma_vol - comfort_zone) / (caution_zone - comfort_zone)).clip(
-                lower=0.0, upper=1.0
-            )
-            smooth_factor = 1.0 - x ** transition_power
-            scale[mask_caution] = linear_scale[mask_caution] * smooth_factor[mask_caution]
+            # comfort == caution 时警惕区为空，跳过避免除零
+            band = caution_zone - comfort_zone
+            if band > 0:
+                x = ((ewma_vol - comfort_zone) / band).clip(
+                    lower=0.0, upper=1.0
+                )
+                smooth_factor = 1.0 - x ** transition_power
+                scale[mask_caution] = linear_scale[mask_caution] * smooth_factor[mask_caution]
         else:
             scale[mask_caution] = linear_scale[mask_caution] * caution_scale
 

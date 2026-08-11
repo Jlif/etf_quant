@@ -27,27 +27,36 @@ def _fill_risk_shortfall(
     safe_haven: str | None,
     fill_by_score: bool = True,
     blocked_df: pd.DataFrame | None = None,
+    partial_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     风控后，将因清零释放的仓位进行再分配。
 
-    约束：最终持仓标的数量不超过 top_n，且总权重保持为 1（满仓）。
+    约束：最终持仓标的数量不超过 top_n；除 partial 缺口留空外，总权重保持为 1。
+    - partial_df 标记的标的（L3 压缩但未熔断）：入选后保留压缩仓位不顶回满仓，
+      压缩释放的仓位留空（现金），不递补也不归 safe_haven。
     - fill_by_score 为 True 时：
       严格按当日得分排名，取前 top_n 名作为目标持仓；
       若前 top_n 中有被风控清零（blocked）的标的，则从 top_n 之后顺位补选，
       而不是重新把被剔除的高分标纳入。
       若后续可选标的不足以填满 top_n，剩余缺口由 safe_haven 承接。
     - fill_by_score 为 False 时：
-      风控释放的仓位不再按得分补选新标的，直接全部买入 safe_haven，保持满仓。
+      风控清零释放的仓位不再按得分补选新标的，直接全部买入 safe_haven。
     """
     adjusted = weights_df.copy()
     weight_cols, name_list = parse_weight_cols(adjusted)
     unit_weight = 1.0 / top_n if top_n > 0 else 0.0
     safe_col = weight_col(safe_haven) if safe_haven and safe_haven in name_list else None
     blocked_df = blocked_df if blocked_df is not None else pd.DataFrame(False, index=adjusted.index, columns=name_list)
+    partial_df = partial_df if partial_df is not None else pd.DataFrame(False, index=adjusted.index, columns=name_list)
 
     for date in adjusted.index:
-        shortfall = 1.0 - adjusted.loc[date, weight_cols].sum()
+        partial = partial_df.loc[date]
+        # L3 压缩标的（仅当前有仓的）仓位缺口留空（现金），不计入待递补缺口
+        w = adjusted.loc[date, weight_cols]
+        held_partial = partial.values & (w.values > 0)
+        cash_deficit = ((unit_weight - w).clip(lower=0).values * held_partial).sum()
+        shortfall = 1.0 - w.sum() - cash_deficit
         if shortfall <= 1e-12:
             continue
 
@@ -66,12 +75,18 @@ def _fill_risk_shortfall(
                     selected.append(name)
                 # 若 name 被 blocked，继续看下一个，从排名后续递补
 
-            # 分配权重：每个入选标 1/top_n
+            # 分配权重：入选标 1/top_n；L3 压缩中的标的保留压缩仓位，缺口留空
             for name in selected:
-                adjusted.loc[date, weight_col(name)] = unit_weight
+                col = weight_col(name)
+                if partial[name] and adjusted.loc[date, col] > 0:
+                    continue
+                adjusted.loc[date, col] = unit_weight
 
-            # 剩余缺口由 safe_haven 承接
-            shortfall = 1.0 - adjusted.loc[date, weight_cols].sum()
+            # 剩余缺口由 safe_haven 承接（压缩缺口仍留空）
+            w2 = adjusted.loc[date, weight_cols]
+            held_partial = partial.values & (w2.values > 0)
+            cash_deficit = ((unit_weight - w2).clip(lower=0).values * held_partial).sum()
+            shortfall = 1.0 - w2.sum() - cash_deficit
 
         if shortfall > 1e-12 and safe_col is not None:
             adjusted.loc[date, safe_col] += shortfall
@@ -253,6 +268,8 @@ def run(
     # L2 是持仓期 ATR 跟踪止损，对未持仓的递补候选无意义（新买入当天才建 HWM），
     # 其当日被止损的持仓由下方 zeroed 掩码覆盖。
     risk_blocked = pd.DataFrame(False, index=df.index, columns=name_list)
+    # L3 压缩（未熔断）标记：这些标的保留压缩仓位，缺口留空不递补
+    l3_compressed = pd.DataFrame(False, index=df.index, columns=name_list)
 
     # 3.05–3.7 三层风控系统
     risk_control = params.get("risk_control", {})
@@ -386,6 +403,8 @@ def run(
             reason_col = f"风控原因_{name}"
             mark = panic_mask & (df[reason_col] == "")
             df.loc[mark, reason_col] = "L3-波动率熔断"
+            # 压缩（0<scale<1，未熔断）标的：递补时保留压缩仓位，缺口留空
+            l3_compressed[name] |= ((l3_scale[name] > 0) & (l3_scale[name] < 1)).fillna(False)
 
         # 标的级别：逐只判断是熔断（清零）还是压缩（降仓但未清零）
         for name in name_list:
@@ -434,6 +453,7 @@ def run(
         safe_haven,
         fill_by_score=fill_by_score,
         blocked_df=blocked_df,
+        partial_df=l3_compressed,
     )
     for name in name_list:
         df[weight_col(name)] = filled_weights[weight_col(name)]

@@ -120,6 +120,9 @@ def run(
         - lookback: 回望周期
         - scoring: "momentum" | "slope_r2" | "momentum_quality" | "ema_diff"
         - top_n: 每天选前 N 个
+        - rebalance_freq: "daily"（默认，每日调仓）| "weekly"（每周调仓一次：
+          当周最后一个交易日收盘生成信号，下周首个交易日开盘调仓，
+          周内其余日期沿用上次权重；三层风控仍每日生效）
 
     Returns
     -------
@@ -264,6 +267,21 @@ def run(
             total_weight = df.loc[date, weight_cols].sum()
             if total_weight > 0:
                 df.loc[date, weight_cols] /= total_weight
+
+    # 3.1 调仓频率：weekly 时仅每周最后一个交易日生成新信号，
+    #     其余日期沿用上次调仓权重（shift 后在下周首个交易日开盘生效）。
+    #     风控层在其后仍逐日运行，可在周内触发止损/熔断。
+    rebalance_freq = params.get("rebalance_freq", "daily")
+    if rebalance_freq == "weekly":
+        weight_cols = [weight_col(n) for n in name_list]
+        # 注意：必须转成 Series 再 shift，PeriodIndex.shift(-1) 是按“周期”平移而非按行
+        week = pd.Series(df.index.to_period("W"), index=df.index)
+        is_rebalance_signal = week != week.shift(-1)
+        is_rebalance_signal.iloc[-1] = True  # 最后一个交易日允许调仓，避免尾部信号被丢弃
+        df.loc[~is_rebalance_signal, weight_cols] = np.nan
+        df[weight_cols] = df[weight_cols].ffill().fillna(0.0)
+    elif rebalance_freq != "daily":
+        raise ValueError(f"不支持的 rebalance_freq: {rebalance_freq!r}（可选 daily | weekly）")
 
     # 初始化风控原因列，用于记录每个过滤器对持仓的调整
     df["风控原因"] = ""

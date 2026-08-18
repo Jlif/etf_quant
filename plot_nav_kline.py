@@ -23,7 +23,7 @@ import pandas as pd
 from matplotlib.patches import Rectangle
 
 
-def plot_nav_kline(df: pd.DataFrame, strategy_name: str, days: int = 60,
+def plot_nav_kline(df: pd.DataFrame, strategy_name: str, days: int = 120,
                    out: str = "output/nav_kline.png") -> None:
     """绘制组合净值 K 线图（近 days 个交易日），保存到 out 并打印简要统计。"""
     nav = df["轮动策略净值"].dropna().tail(days)
@@ -89,7 +89,7 @@ def plot_nav_kline(df: pd.DataFrame, strategy_name: str, days: int = 60,
 def main():
     parser = argparse.ArgumentParser(description="轮动策略组合净值 K 线图")
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--days", type=int, default=60, help="显示的交易日数量（默认60，约3个月）")
+    parser.add_argument("--days", type=int, default=120, help="显示的交易日数量（默认120，约6个月）")
     parser.add_argument("--today", action="store_true", help="使用当天作为截止日")
     args = parser.parse_args()
 

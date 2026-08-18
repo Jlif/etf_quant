@@ -106,8 +106,11 @@ strategies:
       benchmark: "沪深300ETF"
       top_n: 4
       # 调仓频率：daily 每日调仓（默认）；weekly 每周调仓一次
-      # （周五收盘出信号，下周一开盘调仓，周内风控仍每日生效）
+      # （周五收盘出信号，下周一开盘调仓）
       rebalance_freq: weekly
+      # 风控频率（仅 weekly 有效）：rebalance 风控只在调仓日检查，周内仓位完全冻结（默认）；
+      # daily 风控逐日生效，周内可触发止损/熔断并递补
+      risk_freq: daily
       # true: ETF 未预热时不纳入候选池，整体回测从最早 ETF 开始
       dynamic_pool: true
       # 风控导致仓位释放后，是否按当日动量得分顺位补选新标的；false 则直接全部买入 safe_haven

@@ -121,8 +121,9 @@ def run(
         - scoring: "momentum" | "slope_r2" | "momentum_quality" | "ema_diff"
         - top_n: 每天选前 N 个
         - rebalance_freq: "daily"（默认，每日调仓）| "weekly"（每周调仓一次：
-          当周最后一个交易日收盘生成信号，下周首个交易日开盘调仓，
-          周内其余日期沿用上次权重；三层风控仍每日生效）
+          当周最后一个交易日收盘生成信号，下周首个交易日开盘调仓）
+        - risk_freq: 仅 weekly 模式有效。"rebalance"（默认）风控只在调仓
+          信号日做决策，周内仓位完全冻结；"daily" 风控逐日生效，周内可止损/熔断
 
     Returns
     -------
@@ -270,8 +271,9 @@ def run(
 
     # 3.1 调仓频率：weekly 时仅每周最后一个交易日生成新信号，
     #     其余日期沿用上次调仓权重（shift 后在下周首个交易日开盘生效）。
-    #     风控层在其后仍逐日运行，可在周内触发止损/熔断。
+    #     weekly 模式下风控也只在调仓信号日做决策（见 3.9），周内仓位完全冻结。
     rebalance_freq = params.get("rebalance_freq", "daily")
+    is_rebalance_signal: pd.Series | None = None
     if rebalance_freq == "weekly":
         weight_cols = [weight_col(n) for n in name_list]
         # 注意：必须转成 Series 再 shift，PeriodIndex.shift(-1) 是按“周期”平移而非按行
@@ -486,6 +488,22 @@ def run(
     )
     for name in name_list:
         df[weight_col(name)] = filled_weights[weight_col(name)]
+
+    # 3.9 weekly 模式的风控频率控制：
+    #    risk_freq="rebalance"（默认）时，非调仓日的风控结果被丢弃，
+    #    权重与风控原因冻结为上次调仓日的值，周内无论触发什么都不动仓；
+    #    risk_freq="daily" 时风控逐日生效，可在周内触发止损/熔断并递补。
+    #    无论哪种取值，风控层都逐日运行（ATR 高水位线等内部状态按日更新）。
+    risk_freq = params.get("risk_freq", "rebalance")
+    if risk_freq not in ("daily", "rebalance"):
+        raise ValueError(f"不支持的 risk_freq: {risk_freq!r}（可选 daily | rebalance）")
+    if is_rebalance_signal is not None and risk_freq == "rebalance":
+        weight_cols = [weight_col(n) for n in name_list]
+        df.loc[~is_rebalance_signal, weight_cols] = np.nan
+        df[weight_cols] = df[weight_cols].ffill().fillna(0.0)
+        df.loc[~is_rebalance_signal, "风控原因"] = ""
+        for name in name_list:
+            df.loc[~is_rebalance_signal, f"风控原因_{name}"] = ""
 
     # 4. 保存原始信号日权重和风控原因，供“今日交易信号”展示使用。
     #    回测收益仍使用 shift 后的持仓列，保持 T 日信号决定 T+1 日收益的逻辑。

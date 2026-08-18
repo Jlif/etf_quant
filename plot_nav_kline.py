@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -23,35 +22,11 @@ import numpy as np
 import pandas as pd
 from matplotlib.patches import Rectangle
 
-from data_source import get_data_source
-from core.orchestrator import compute_signal_start_date, fetch_pool_data, run_strategy
-from utils import load_config
 
-
-def main():
-    parser = argparse.ArgumentParser(description="轮动策略组合净值 K 线图")
-    parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--days", type=int, default=60, help="显示的交易日数量（默认60，约3个月）")
-    parser.add_argument("--today", action="store_true", help="使用当天作为截止日")
-    args = parser.parse_args()
-
-    cutoff_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-
-    app_config = load_config(args.config)
-    strategy = next(s for s in app_config.strategies if s.enabled and s.mode == "rotation")
-
-    data_source = get_data_source(name=app_config.data_source.provider, fallback=False, skip_test=True)
-    start_date = compute_signal_start_date(strategy, cutoff_date).strftime("%Y%m%d")
-    data = fetch_pool_data(
-        strategy, app_config, data_source,
-        include_today=args.today, cutoff_date=cutoff_date,
-        start_date=start_date,
-        min_bars=strategy.params.get("lookback", 20) + 5,
-        skip_download=True,
-    )
-    df, name_list = run_strategy(strategy, app_config, data_source, data=data)
-
-    nav = df["轮动策略净值"].dropna().tail(args.days)
+def plot_nav_kline(df: pd.DataFrame, strategy_name: str, days: int = 60,
+                   out: str = "output/nav_kline.png") -> None:
+    """绘制组合净值 K 线图（近 days 个交易日），保存到 out 并打印简要统计。"""
+    nav = df["轮动策略净值"].dropna().tail(days)
     daily_ret = df["轮动策略日收益率"].reindex(nav.index)
 
     # 构造 K 线 OHLC：开=昨收净值，收=当日净值
@@ -86,7 +61,7 @@ def main():
 
     total_ret = close[-1] / open_[0] - 1.0
     ax.set_title(
-        f"{strategy.name} — 组合净值K线（近{len(nav)}个交易日）\n"
+        f"{strategy_name} — 组合净值K线（近{len(nav)}个交易日）\n"
         f"区间收益 {total_ret:+.2%} | 当前净值 {close[-1]:.3f} | 距区间峰值 {cur_dd:+.2%}",
         fontsize=13,
     )
@@ -98,17 +73,46 @@ def main():
     ax.set_xlim(-1, len(nav))
     fig.tight_layout()
 
-    out = "output/nav_kline.png"
     fig.savefig(out, dpi=150)
-    print(f"已保存: {out}")
+    plt.close(fig)
+    print(f"[净值K线] 已保存: {out}")
 
     # 辅助决策的简要统计
     recent5 = close[-1] / close[-6] - 1.0 if len(nav) > 5 else np.nan
     recent20 = close[-1] / close[-21] - 1.0 if len(nav) > 20 else np.nan
-    print(f"近5日收益: {recent5:+.2%} | 近20日收益: {recent20:+.2%} | 距区间峰值: {cur_dd:+.2%}")
+    print(f"[净值K线] 近5日收益: {recent5:+.2%} | 近20日收益: {recent20:+.2%} | 距区间峰值: {cur_dd:+.2%}")
     print("最近10日净值:")
     for d, v, r in zip(nav.index[-10:], close[-10:], daily_ret.iloc[-10:]):
         print(f"  {d:%Y-%m-%d}  净值 {v:.4f}  日收益 {r:+.2%}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="轮动策略组合净值 K 线图")
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--days", type=int, default=60, help="显示的交易日数量（默认60，约3个月）")
+    parser.add_argument("--today", action="store_true", help="使用当天作为截止日")
+    args = parser.parse_args()
+
+    from data_source import get_data_source
+    from core.orchestrator import compute_signal_start_date, fetch_pool_data, run_strategy
+    from utils import load_config
+
+    cutoff_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    app_config = load_config(args.config)
+    strategy = next(s for s in app_config.strategies if s.enabled and s.mode == "rotation")
+
+    data_source = get_data_source(name=app_config.data_source.provider, fallback=False, skip_test=True)
+    start_date = compute_signal_start_date(strategy, cutoff_date).strftime("%Y%m%d")
+    data = fetch_pool_data(
+        strategy, app_config, data_source,
+        include_today=args.today, cutoff_date=cutoff_date,
+        start_date=start_date,
+        min_bars=strategy.params.get("lookback", 20) + 5,
+        skip_download=True,
+    )
+    df, name_list = run_strategy(strategy, app_config, data_source, data=data)
+    plot_nav_kline(df, strategy.name, days=args.days)
 
 
 if __name__ == "__main__":

@@ -169,6 +169,10 @@ def main():
                 strategy, result, name_list, last_quote_dates,
                 capital=total_capital, lot_size=lot_size,
             )
+
+            if strategy.mode == "rotation" and "轮动策略净值" in result.columns:
+                from plot_nav_kline import plot_nav_kline
+                plot_nav_kline(result, strategy.name)
         except Exception as e:
             print(f"\n[错误] 策略 '{strategy.name}' 执行失败: {e}")
             import traceback

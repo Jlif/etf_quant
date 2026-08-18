@@ -8,6 +8,7 @@ import numpy as np
 from core.scorer import (
     adaptive_momentum_score,
     momentum_quality_score,
+    ema_diff_score,
     momentum_score,
     slope_r2_score,
 )
@@ -117,7 +118,7 @@ def run(
         标的名称列表
     params : dict
         - lookback: 回望周期
-        - scoring: "momentum" | "slope_r2"
+        - scoring: "momentum" | "slope_r2" | "momentum_quality" | "ema_diff"
         - top_n: 每天选前 N 个
 
     Returns
@@ -173,6 +174,13 @@ def run(
             )
         signal_cols = [f"得分_{v}" for v in name_list]
         prefix = "得分_"
+    elif scoring == "ema_diff":
+        fast = params.get("ema_fast", 12)
+        slow = params.get("ema_slow", 26)
+        for name in name_list:
+            df[f"趋势_{name}"] = ema_diff_score(df[name], fast, slow)
+        signal_cols = [f"趋势_{v}" for v in name_list]
+        prefix = "趋势_"
     elif scoring == "momentum_quality":
         for name in name_list:
             df[f"质量_{name}"] = df[name].rolling(lookback).apply(
@@ -195,6 +203,9 @@ def run(
             etf_type = type_map.get(name)
             if params.get("adaptive_scoring"):
                 window = required_window(etf_type, lookback)
+            elif scoring == "ema_diff":
+                # EMA 需要约 2 倍慢线周期预热才稳定
+                window = params.get("ema_slow", 26) * 2
             elif scoring == "slope_r2" or scoring == "momentum_quality":
                 window = lookback
             else:

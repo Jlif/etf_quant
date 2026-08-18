@@ -19,6 +19,20 @@ def momentum_score(srs: pd.Series, lookback: int) -> float:
     return srs.iloc[-1] / srs.iloc[-(lookback + 1)] - 1.0
 
 
+def ema_diff_score(srs: pd.Series, fast: int = 12, slow: int = 26) -> pd.Series:
+    """
+    EMA 趋势差得分（MACD 式平滑动量），向量化返回整列得分。
+
+    score = (EMA_fast - EMA_slow) / close
+
+    无固定窗口，近期权重高、远期指数衰减，不存在基点滚动效应。
+    前 slow 个点为 NaN 作为预热期。
+    """
+    ema_fast = srs.ewm(span=fast, min_periods=fast).mean()
+    ema_slow = srs.ewm(span=slow, min_periods=slow).mean()
+    return (ema_fast - ema_slow) / srs
+
+
 def slope_r2_score(srs: pd.Series, lookback: int) -> float:
     """
     斜率 * R^2 得分

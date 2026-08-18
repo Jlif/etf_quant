@@ -613,7 +613,11 @@ def print_latest_signal(
 
     if strategy.mode == "rotation":
         scoring = strategy.params.get("scoring", "momentum")
-        prefix = "得分_" if scoring == "slope_r2" else "涨幅_"
+        prefix = {
+            "slope_r2": "得分_",
+            "momentum_quality": "质量_",
+            "ema_diff": "趋势_",
+        }.get(scoring, "涨幅_")
         lookback = strategy.params.get("lookback", 20)
         top_n = strategy.params.get("top_n", 1)
 
@@ -658,12 +662,18 @@ def print_latest_signal(
 
         name_w = max(display_width(n) for n in list(name_list) + ["ETF名称"])
         vol_header = f"波动率EWMA{vol_lookback_l3}" if l3_enabled else "波动率"
+        score_header = {
+            "momentum": f"动量{lookback}日",
+            "slope_r2": f"斜率R2_{lookback}日",
+            "momentum_quality": f"动量质量{lookback}日",
+            "ema_diff": f"趋势差{strategy.params.get('ema_fast', 12)}/{strategy.params.get('ema_slow', 26)}",
+        }.get(scoring, "周期动量得分")
         header = (
             f"{ljust('排名', 4)} "
             f"{ljust('ETF名称', name_w)} "
             f"{ljust('代码', 10)} "
             f"{ljust('最新行情日', 12)} "
-            f"{ljust('周期动量得分', 12)} "
+            f"{ljust(score_header, 12)} "
             f"{ljust(vol_header, 13)} "
         )
         if l1_enabled:
@@ -720,7 +730,7 @@ def print_latest_signal(
             signal_weight_pct = f"{signal_weight*100:.0f}%" if signal_weight > 0 else "0%"
             if pd.isna(score):
                 score_str = "-"
-            elif scoring == "momentum":
+            elif scoring in ("momentum", "ema_diff"):
                 score_str = f"{score:+.2%}"
             else:
                 score_str = f"{score:.4f}"

@@ -98,6 +98,10 @@ strategies:
     params:
       lookback: 20
       scoring: momentum
+      # ema_diff 评分参数：快/慢 EMA 周期（仅 scoring=ema_diff 时生效）
+      # 网格扫描(2019至今)最优区域 fast 5~8 / slow 20~30，8/30 的 Sharpe 最高
+      # ema_fast: 8
+      # ema_slow: 30
       adaptive_scoring: false
       benchmark: "沪深300ETF"
       top_n: 4

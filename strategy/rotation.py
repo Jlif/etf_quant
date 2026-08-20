@@ -37,10 +37,10 @@ def _fill_risk_shortfall(
     - partial_df 标记的标的（L3 压缩但未熔断）：入选后保留压缩仓位不顶回满仓，
       压缩释放的仓位留空（现金），不递补也不归 safe_haven。
     - fill_by_score 为 True 时：
-      严格按当日得分排名，取前 top_n 名作为目标持仓；
-      若前 top_n 中有被风控清零（blocked）的标的，则从 top_n 之后顺位补选，
-      而不是重新把被剔除的高分标纳入。
-      若后续可选标的不足以填满 top_n，剩余缺口由 safe_haven 承接。
+      只补被风控清零释放的缺口，现有持仓原样保留；
+      按当日得分排名依次选未持仓且未 blocked 的标的，每个补 1/top_n，
+      直到缺口填满或持仓数达到 top_n；
+      若后续可选标的不足，剩余缺口由 safe_haven 承接。
     - fill_by_score 为 False 时：
       风控清零释放的仓位不再按得分补选新标的，直接全部买入 safe_haven。
     """
@@ -67,21 +67,18 @@ def _fill_risk_shortfall(
             ranked = ranked[ranked > 0]
             blocked = set(name_list[i] for i, v in enumerate(blocked_df.loc[date].values) if v)
 
-            # 目标：从排名中依次取 top_n 个非 blocked 标的
-            selected: list[str] = []
-            for name, _ in ranked.items():
-                if len(selected) >= top_n:
+            # 只补被清零释放的缺口：按得分顺序选未持仓、未 blocked 的标的，
+            # 每个补 1/top_n；旧持仓（含 L3 压缩中的）原样保留，不清仓也不顶回
+            held_count = int((w.values > 0).sum())
+            for name in ranked.index:
+                if shortfall <= 1e-12 or held_count >= top_n:
                     break
-                if name not in blocked:
-                    selected.append(name)
-                # 若 name 被 blocked，继续看下一个，从排名后续递补
-
-            # 分配权重：入选标 1/top_n；L3 压缩中的标的保留压缩仓位，缺口留空
-            for name in selected:
                 col = weight_col(name)
-                if partial[name] and adjusted.loc[date, col] > 0:
+                if name in blocked or adjusted.loc[date, col] > 0:
                     continue
-                adjusted.loc[date, col] = unit_weight
+                adjusted.loc[date, col] = min(unit_weight, shortfall)
+                shortfall -= adjusted.loc[date, col]
+                held_count += 1
 
             # 剩余缺口由 safe_haven 承接（压缩缺口仍留空）
             w2 = adjusted.loc[date, weight_cols]

@@ -355,3 +355,32 @@ def test_three_layer_risk_control_runs_in_order():
     assert "轮动策略净值" in result.columns
     assert result["轮动策略净值"].iloc[-1] > 0
     assert "风控原因" in result.columns
+
+
+def test_fill_risk_shortfall_only_fills_zeroed_slot():
+    """风控递补只补被清零的缺口：掉出得分前列的旧持仓保留，不得出现 >top_n 只或总仓位 >1。"""
+    from strategy._common import weight_col
+    from strategy.rotation import _fill_risk_shortfall
+
+    idx = pd.date_range("2026-08-18", periods=1)
+    names = ["有色", "标普500", "化工", "能源", "黄金", "A500"]
+    # 有色被熔断清零，其余三只各持 0.25（能源得分已掉出前四）
+    weights = pd.DataFrame(0.0, index=idx, columns=[weight_col(n) for n in names])
+    for n in ["标普500", "化工", "能源"]:
+        weights[weight_col(n)] = 0.25
+    scores = pd.DataFrame(
+        {"有色": [0.19], "化工": [0.10], "黄金": [0.09], "标普500": [0.08],
+         "能源": [0.05], "A500": [0.048]}, index=idx
+    )
+    eligible = pd.DataFrame(True, index=idx, columns=names)
+    blocked = pd.DataFrame(False, index=idx, columns=names)
+    blocked["有色"] = True
+
+    out = _fill_risk_shortfall(
+        weights, scores, eligible, top_n=4, safe_haven=None,
+        fill_by_score=True, blocked_df=blocked,
+    )
+    row = out.iloc[0]
+    held = {n: row[weight_col(n)] for n in names if row[weight_col(n)] > 0}
+    assert held == {"标普500": 0.25, "化工": 0.25, "能源": 0.25, "黄金": 0.25}
+    assert abs(row.sum() - 1.0) < 1e-9

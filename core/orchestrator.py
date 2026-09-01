@@ -80,7 +80,6 @@ def report_strategy_result(
     csv_path = save_holding_csv(holding_df, strategy.name)
     if csv_path:
         print(f"[持仓记录已保存] {csv_path}")
-        print_holding_summary(holding_df, strategy.name)
 
 
 def detect_and_fix_price_jumps(
@@ -840,15 +839,6 @@ def build_holding_df(result: pd.DataFrame) -> pd.DataFrame | None:
         )
 
     return holding_df
-
-
-def print_holding_summary(holding_df: pd.DataFrame, strategy_name: str, tail_n: int = 10) -> None:
-    """在终端打印最近若干条每日持仓记录摘要。"""
-    print(f"\n{'='*80}")
-    print(f"【每日持仓记录】{strategy_name}（最近 {tail_n} 条）")
-    print(f"{'='*80}")
-    print(holding_df.tail(tail_n).to_string())
-    print(f"{'='*80}")
 
 
 def print_position_contribution(strategy: StrategyConfig, result: pd.DataFrame, name_list: list[str]):

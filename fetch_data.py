@@ -72,8 +72,8 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
 
     today_str = datetime.date.today().isoformat()
 
-    fetched = []  # (name, start_date, end_date)
-    for i, code in enumerate(codes):
+    def fetch_one(i: int, code: str):
+        """拉取单个标的并写缓存，返回 (name, start, end)；跳过/失败返回对应占位。"""
         name = names.get(code, code)
         cache_file = os.path.join(cache_dir, f"{code}_{data_source.name}.csv")
         meta_file = cache_file + ".meta.json"
@@ -82,8 +82,7 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
         last_date = _cache_last_date(cache_file)
         if last_date == today_str:
             print(f"[{i + 1}/{len(codes)}] 跳过 {code} ({name}) 缓存已是最新 ({last_date})")
-            fetched.append((name, None, last_date))
-            continue
+            return (name, None, last_date)
 
         # 有缓存时从缓存最后一天增量拉取（含当天，新数据覆盖重叠日期）；
         # 需要全量重拉时，手动删除对应缓存文件即可。
@@ -95,7 +94,7 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
         df_new = data_source.fetch(code, fetch_start, expect_today=include_today)
         if df_new is None or df_new.empty:
             print(f"  [警告] {code} ({name}) 未返回数据")
-            continue
+            return None
 
         if os.path.exists(cache_file):
             df_old = pd.read_csv(cache_file, index_col=0, parse_dates=True)
@@ -107,14 +106,26 @@ def fetch_all_data(app_config, data_source, include_today: bool = False) -> None
         with open(meta_file, "w", encoding="utf-8") as f:
             json.dump({"adjusted": data_source.adjusted}, f)
 
-        start_dt = df_result.index[0]
-        end_dt = df_result.index[-1]
-        fetched.append((name, start_dt.date(), end_dt.date()))
         print(f"  [完成] {code} ({name})  -> {cache_file} ({len(df_result)} 行)")
+        return (name, df_result.index[0].date(), df_result.index[-1].date())
 
-        # tickflow 无需限速；akshare 东财接口标的之间限速 1s
-        if data_source.name != "tickflow" and i < len(codes) - 1:
-            time.sleep(1)
+    fetched = []  # (name, start_date, end_date)
+    if data_source.name == "tickflow":
+        # tickflow 无需限速，并发拉取提速；每个标的使用独立缓存文件，无写冲突
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(8, len(codes))) as ex:
+            for result in ex.map(lambda ic: fetch_one(*ic), enumerate(codes)):
+                if result:
+                    fetched.append(result)
+    else:
+        # akshare 东财接口标的之间限速 1s
+        for i, code in enumerate(codes):
+            result = fetch_one(i, code)
+            if result:
+                fetched.append(result)
+            if i < len(codes) - 1:
+                time.sleep(1)
 
     if fetched:
         print("\n[数据] 各 ETF 数据起止日期:")

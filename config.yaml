@@ -106,7 +106,7 @@ strategies:
       top_n: 4
       # 调仓频率：daily 每日调仓（默认）；weekly 每周调仓一次
       # （周五收盘出信号，下周一开盘调仓）
-      rebalance_freq: weekly
+      rebalance_freq: daily
       # 风控频率（仅 weekly 有效）：rebalance 风控只在调仓日检查，周内仓位完全冻结（默认）；
       # daily 风控逐日生效，周内可触发止损/熔断并递补
       risk_freq: daily
